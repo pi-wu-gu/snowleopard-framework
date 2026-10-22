@@ -73,6 +73,10 @@ public final class SnowLeopardMod {
             core.startupReport().forEach(line -> LOG.info("[雪豹框架] {}", line));
             LOG.info("[雪豹框架] SPI 发现 {} 个: {}；entitytools 骨架 {} 个: {}",
                     loaded.size(), loaded, wired.size(), wired);
+
+            // 死亡流：绑定实体死亡 → 感官自动关闭（裁决 05:10）
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(EntityToolsRuntime::onLivingDeath);
+
             SelfTest.run(core);
         } catch (Throwable t) {
             // 装配失败只该让"工具组能力不可用"，不该让整个模组加载失败
