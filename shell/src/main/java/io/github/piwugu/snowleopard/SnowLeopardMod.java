@@ -13,6 +13,8 @@ import org.slf4j.Logger;
 import snowleopard.core.SnowLeopard;
 import snowleopard.core.names.Names;
 
+import io.github.piwugu.snowleopard.tools.EntityToolsProvider;
+
 /**
  * 雪豹框架（Snow Leopard Framework）—— 把雪豹决策核心嵌进 NeoForge 的<b>薄壳</b>。
  *
@@ -58,8 +60,20 @@ public final class SnowLeopardMod {
 
             List<String> loaded = core.loader().loadDiscovered(
                     Names.SourceType.MOD, SnowLeopardMod.class.getClassLoader());
+
+            // entitytools 骨架显式装配（M0：壳=装配点；不走 ServiceLoader，装配路径一眼可见）
+            List<String> wired = new java.util.ArrayList<>();
+            for (snowleopard.core.spi.ToolGroupProvider p : EntityToolsProvider.skeletons()) {
+                String full = core.loader().load(p, Names.SourceType.MOD);
+                if (full != null) {
+                    wired.add(full);
+                }
+            }
+
             core.startupReport().forEach(line -> LOG.info("[雪豹框架] {}", line));
-            LOG.info("[雪豹框架] 工具组装载 {} 个: {}", loaded.size(), loaded);
+            LOG.info("[雪豹框架] SPI 发现 {} 个: {}；entitytools 骨架 {} 个: {}",
+                    loaded.size(), loaded, wired.size(), wired);
+            SelfTest.run(core);
         } catch (Throwable t) {
             // 装配失败只该让"工具组能力不可用"，不该让整个模组加载失败
             LOG.error("[雪豹框架] 核心装配失败——决策依赖不可用", t);

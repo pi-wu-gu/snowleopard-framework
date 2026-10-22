@@ -5,3 +5,5 @@ pluginManagement {
 }
 
 rootProject.name = 'snowleopard-framework'
+include 'shell'
+include 'entitytools'

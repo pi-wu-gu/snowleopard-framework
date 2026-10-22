@@ -1,0 +1,34 @@
+// entitytools：实体控制工具组（MC 能力面，契约先行模块）。
+// M0 阶段保持**纯 Java**（契约/状态机/测试），MC 接线自 M1 起在本模块内新增适配层。
+// 依赖雪豹决策核心（ToolGroupProvider / Result 契约类型）；运行时核心由 shell jarJar 提供。
+plugins {
+    id 'java-library'
+}
+
+group = mod_group_id
+version = mod_version
+
+def snowleopardRepo = providers.gradleProperty('snowleopardRepo')
+        .orElse(providers.environmentVariable('SNOWLEOPARD_M2'))
+        .orElse("${rootDir}/libs/m2")
+        .get()
+
+repositories {
+    maven { name = 'SnowLeopard Local'; url = uri(snowleopardRepo) }
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly "snowleopard.core:snowleopard-core:${snowleopard_core_version}"   // 运行时由 shell jarJar 提供
+    testImplementation "snowleopard.core:snowleopard-core:${snowleopard_core_version}"
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+    }
+}
