@@ -1,0 +1,76 @@
+package io.github.piwugu.snowleopard;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import com.mojang.logging.LogUtils;
+import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.loading.FMLPaths;
+import org.slf4j.Logger;
+
+import snowleopard.core.SnowLeopard;
+import snowleopard.core.names.Names;
+
+/**
+ * 雪豹框架（Snow Leopard Framework）—— 把雪豹决策核心嵌进 NeoForge 的<b>薄壳</b>。
+ *
+ * <p><b>架构边界（双件套，2026-10-23）</b>：决策、工具、记忆、权限、确认全在
+ * {@code snowleopard-core}（零 MC）；本壳只做三件事——
+ * ① 装配门面（{@link SnowLeopard#bootstrap}，S1–S6）；
+ * ② SPI 工具组发现（{@code loadDiscovered}——NeoForge 的 ModClassLoader 可见全部模组类，
+ * 这正是"装载器拼限定名"的类加载器交接点）；
+ * ③ 启动报告入日志。<b>壳里出现决策代码即架构漂移</b>。
+ *
+ * <p><b>参考边界</b>（2026-10-23 04:08 用户裁决）：公开仓库（aiplayer 等）仅作局部参考、
+ * 架构不照搬；架构以雪豹决策核心自身设计为准（工具组支持可行性分析 §四 + 门面 S1–S6）。
+ *
+ * <p>双端加载（BOTH）：无界面的决策依赖，客户端与专用服务器同一装配路径。
+ * 构造期装配是安全的——本壳不依赖资源包/渲染/语言（与 friday 的客户端宿主不同）。
+ */
+@Mod(SnowLeopardMod.MODID)
+public final class SnowLeopardMod {
+
+    public static final String MODID = "snowleopard";
+
+    public static final Logger LOG = LogUtils.getLogger();
+
+    private static volatile SnowLeopard core;
+
+    public SnowLeopardMod(ModContainer container) {
+        try {
+            Path gameDir = FMLPaths.GAMEDIR.get();
+            Path storage = gameDir.resolve("snowleopard");
+            Path permFile = gameDir.resolve("config").resolve("snowleopard-permissions.json");
+
+            // S3：权限政策必须显式——有权限文件走文件，没有就 allowAll 并点名（不静默继承）
+            SnowLeopard.Options opts;
+            if (Files.exists(permFile)) {
+                opts = SnowLeopard.Options.fromFiles(permFile, null);
+                LOG.info("[雪豹框架] 权限文件: {}", permFile);
+            } else {
+                opts = SnowLeopard.Options.allowAll();
+                LOG.warn("[雪豹框架] 未找到权限文件 {}——以 allowAll 显式装配；生产环境请配置权限文件", permFile);
+            }
+
+            core = SnowLeopard.bootstrap(storage, opts);
+
+            List<String> loaded = core.loader().loadDiscovered(
+                    Names.SourceType.MOD, SnowLeopardMod.class.getClassLoader());
+            core.startupReport().forEach(line -> LOG.info("[雪豹框架] {}", line));
+            LOG.info("[雪豹框架] 工具组装载 {} 个: {}", loaded.size(), loaded);
+        } catch (Throwable t) {
+            // 装配失败只该让"工具组能力不可用"，不该让整个模组加载失败
+            LOG.error("[雪豹框架] 核心装配失败——决策依赖不可用", t);
+        }
+    }
+
+    /**
+     * 其他模组的入口：取核心门面（root 级）。装配失败时返回 null，调用方须判空。
+     * caller 级能力经 {@code core().forCaller(id)} 进入各模型的家。
+     */
+    public static SnowLeopard core() {
+        return core;
+    }
+}

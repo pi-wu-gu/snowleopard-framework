@@ -1,0 +1,32 @@
+# 雪豹框架（Snow Leopard Framework）—— 雪豹决策核心的 NeoForge 薄壳
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+authors="${mod_authors}"
+displayURL="https://github.com/${mod_github}"
+description='''
+雪豹框架 —— 把雪豹决策核心（snowleopard-core）嵌进 NeoForge 的薄壳（双件套的模组侧）。
+工具组注册与检索、ID 级存储隔离、分级记忆、调用编排、权限门禁全在核心（零 MC）；
+本壳只做装配门面、SPI 工具组发现（类加载器交接）与启动报告入日志——壳里没有业务逻辑。
+其他模组实现 ToolGroupProvider（或以清单接入）即自动注册，来源强制标注。
+无界面、双端加载（BOTH）：客户端与专用服务器均可作决策依赖。
+'''
+
+[[dependencies.${mod_id}]]
+modId="neoforge"
+type="required"
+versionRange="[${neo_version},)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.${mod_id}]]
+modId="minecraft"
+type="required"
+versionRange="${minecraft_version_range}"
+ordering="NONE"
+side="BOTH"
