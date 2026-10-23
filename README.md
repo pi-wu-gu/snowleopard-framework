@@ -15,11 +15,22 @@
 
 ## 构建
 
-```bash
-# 1. 先产核心到本地 maven（在雪豹决策核心仓执行）
-./build.sh publish ../../project/snowleopard-framework/libs/m2
+> 两个仓需要**并列**克隆（框架的 `build.gradle` 从 `libs/m2` 取核心，脚本按相对路径找）：
+>
+> ```bash
+> mkdir snowleopard && cd snowleopard
+> git clone https://github.com/pi-wu-gu/snowleopard-core.git
+> git clone https://github.com/pi-wu-gu/snowleopard-framework.git
+> ```
+>
+> 目录名对不上时，把下面第 1 步的目标路径改成你的框架仓 `libs/m2`，或用
+> `-PsnowleopardRepo=<m2 路径>` / 环境变量 `SNOWLEOPARD_M2` 覆盖。
 
-# 2. 构建模组（在本仓执行；两模块：shell + entitytools）
+```bash
+# 1. 先产核心到本地 maven（在 snowleopard-core 仓执行）
+./build.sh publish ../snowleopard-framework/libs/m2
+
+# 2. 构建模组（在 snowleopard-framework 仓执行；两模块：shell + entitytools）
 ./gradlew build              # 产物 shell/build/libs/snowleopard-neoforge-1.21.1-<ver>.jar（内嵌核心与 entitytools）
 ./gradlew :entitytools:test  # 契约/状态机 headless 测试
 ./gradlew runClient          # 开发期跑客户端
