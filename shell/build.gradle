@@ -52,16 +52,26 @@ neoForge {
         server {
             server()
             programArgument '--nogui'
+            gameDirectory = project.file('run-server')   // 真机自测通道（M1 起）
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         }
         configureEach {
             logLevel = org.slf4j.event.Level.INFO
+            // dev 运行时额外类路径：纯 Java 的核心放库层即可（无 MC 引用）；
+            // 用 MC 类的 entitytools 走 mods{} 源集进模组域（见上）。
+            // （2026-10-23 排障：jarJar 模块不进 dev 类路径 → NoClassDefFoundError。）
+            def extra = additionalRuntimeClasspathConfiguration
+            extra.dependencies.add(project.dependencies.create(
+                    "snowleopard.core:snowleopard-core:${snowleopard_core_version}"))
         }
     }
 
     mods {
         "${mod_id}" {
             sourceSet(sourceSets.main)
+            // entitytools 进模组域（M1 排障 2026-10-23：MC 能力面必须住模组域——
+            // 库层（additionalRuntimeClasspath→BOOTSTRAP）看不见 net.minecraft 类）。
+            sourceSet(project(':entitytools').sourceSets.main)
         }
     }
 }
@@ -71,12 +81,13 @@ configurations {
 }
 
 dependencies {
-    // jarJar = 把核心打进 mod jar 的 META-INF/jarjar（双件套的分发形态）：玩家只放一个模组 jar。
-    // 版本用精确值：区间要拉版本清单、离线即失败；兼容性由 coreApi 校验兜底。
-    jarJar(implementation("snowleopard.core:snowleopard-core:${snowleopard_core_version}"))
-    // entitytools：实体控制工具组（MC 能力面）。同 jarJar 域装载——entitytools 的类
-    // 与核心的类在同一嵌套域互相可见；壳里只写装配（显式 load，不走 ServiceLoader）。
-    jarJar(implementation(project(':entitytools')))
+    // 实现与嵌入分开声明（2026-10-23 教训：jarJar(implementation(x)) 的模块会被排除出
+    // dev 运行时的 legacyClassPath——NoClassDefFoundError: SnowLeopard$Options）。
+    // implementation 管编译+dev 运行；jarJar 管打包嵌入（生产单 jar 分发不变）。
+    implementation "snowleopard.core:snowleopard-core:${snowleopard_core_version}"
+    implementation project(':entitytools')
+    jarJar "snowleopard.core:snowleopard-core:${snowleopard_core_version}"
+    jarJar project(':entitytools')
 }
 
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {

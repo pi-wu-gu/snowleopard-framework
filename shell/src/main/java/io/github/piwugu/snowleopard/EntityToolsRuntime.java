@@ -29,7 +29,7 @@ public final class EntityToolsRuntime {
     private EntityToolsRuntime() {
     }
 
-    /** 取（或建）某模型的模块。 */
+    /** 取（或建）某模型的模块。世界上下文：有玩家取其所在世界与位置；无玩家退回出生点（专用服务器自测可用）。 */
     public static EntityToolsModule module(String modelId) {
         return MODULES.computeIfAbsent(modelId, id -> new EntityToolsModule(id, new EntityToolsModule.Ctx() {
             @Override
@@ -38,18 +38,25 @@ public final class EntityToolsRuntime {
                 if (s == null) {
                     return null;
                 }
-                ServerPlayer p = s.getPlayerList().getPlayers().isEmpty()
-                        ? null : s.getPlayerList().getPlayers().get(0);
+                ServerPlayer p = firstPlayer(s);
                 return p != null ? p.serverLevel() : s.overworld();
             }
 
             @Override
-            public Player center() {
+            public net.minecraft.core.BlockPos center() {
                 MinecraftServer s = ServerLifecycleHooks.getCurrentServer();
-                return (s == null || s.getPlayerList().getPlayers().isEmpty())
-                        ? null : s.getPlayerList().getPlayers().get(0);
+                if (s == null) {
+                    return null;
+                }
+                ServerPlayer p = firstPlayer(s);
+                return p != null ? p.blockPosition() : s.overworld().getSharedSpawnPos();
             }
         }));
+    }
+
+    private static ServerPlayer firstPlayer(MinecraftServer s) {
+        return s.getPlayerList().getPlayers().isEmpty()
+                ? null : s.getPlayerList().getPlayers().get(0);
     }
 
     /**

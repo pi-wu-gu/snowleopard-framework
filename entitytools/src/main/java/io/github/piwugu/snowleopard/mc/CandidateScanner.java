@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.LivingEntity;
@@ -27,16 +28,18 @@ public final class CandidateScanner {
     }
 
     /**
-     * 扫描候选。center 为参照玩家（半径中心）；excludeRefs 为不可选实体（已被其他模型绑定）。
+     * 扫描候选。center 为半径中心（坐标——无玩家的专用服务器也能跑）；
+     * excludeRefs 为不可选实体（已被其他模型绑定）。
      */
-    public static List<CandidateInfo> scan(ServerLevel level, Player center,
+    public static List<CandidateInfo> scan(ServerLevel level, BlockPos center,
                                            double radius, java.util.function.Predicate<String> excludeRefs) {
         List<CandidateInfo> out = new ArrayList<>();
         if (level == null || center == null) {
             return out;
         }
-        AABB box = new AABB(center.blockPosition()).inflate(radius);
-        for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, box, e -> e != center)) {
+        AABB box = new AABB(center).inflate(radius);
+        for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, box,
+                e -> !(e instanceof Player))) {
             String ref = e.getUUID().toString();
             if (excludeRefs != null && excludeRefs.test(ref)) {
                 continue;

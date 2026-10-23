@@ -25,11 +25,11 @@ import snowleopard.core.result.Result;
  */
 public final class EntityToolsModule {
 
-    /** 世界上下文供应（壳侧注入：当前服务器世界与参照玩家）。 */
+    /** 世界上下文供应（壳侧注入：当前服务器世界与扫描中心——无玩家也可用世界出生点）。 */
     public interface Ctx {
         ServerLevel level();
 
-        Player center();
+        net.minecraft.core.BlockPos center();
     }
 
     private final String modelId;
@@ -95,9 +95,9 @@ public final class EntityToolsModule {
     /** 开启感官：唤醒旧休眠（新一轮公平）→ 采集候选三件套 → 等待选取。 */
     Result open(java.util.function.Predicate<String> excludeRefs) {
         ServerLevel level = ctx.level();
-        Player center = ctx.center();
+        net.minecraft.core.BlockPos center = ctx.center();
         if (level == null || center == null) {
-            return Result.error("世界未就绪（无服务器世界或参照玩家）——无法采集候选");
+            return Result.error("世界未就绪（无服务器世界或扫描中心）——无法采集候选");
         }
         // 重开=重新选取：原绑定解绑、全部休眠唤醒
         String prev = bindings.entityOf(modelId);

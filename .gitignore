@@ -46,3 +46,7 @@ repo/
 # 运行期数据（游戏目录下的 snowleopard/ 不会出现在仓库里，防御性忽略）
 /snowleopard/
 run/
+
+shell/run-server/*
+!shell/run-server/eula.txt
+!shell/run-server/server.properties
