@@ -7,7 +7,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.levelgen.Heightmap;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 
@@ -34,15 +33,28 @@ public final class SelfTestScenario {
         BlockPos base = null;
         try {
             level = server.overworld();
-            base = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING,
-                    level.getSharedSpawnPos().offset(8, 0, 8));
+            // 一测一房（2026-10-23 裁决）：封闭单元塔——建房=清场+封壳，层距 56>2×扫描半径，
+            // 层间互不可见。M1→M7 各占一层（index 0..6），残留/游荡不串房。
+            BlockPos[] rooms = TestCells.buildAll(level, 7);
+            m4Room = rooms[3];   // 先定 M4 房——后面同步段异常也不能让 tick 驱动器拿到 null
+            base = rooms[0];
+            step("M1", true, "建 7 座封闭测试房（一测一房）",
+                    "层距=" + TestCells.PITCH + " 内空=" + TestCells.INTERIOR + "x" + TestCells.HEIGHT);
+            EntityToolsRuntime.setScanAnchor("selftest-m1", rooms[0]);
 
             Zombie z1 = new Zombie(level);
+
+            z1.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
             z1.moveTo(base.getX() + 0.5, base.getY(), base.getZ() + 0.5, 0, 0);
             level.addFreshEntity(z1);
+            z1.goalSelector.removeAllGoals(g -> true);   // 剥 AI=环境确定性（游荡会堵 M4 goto 目标）
+            z1.targetSelector.removeAllGoals(g -> true);
             Zombie z2 = new Zombie(level);
+            z2.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
             z2.moveTo(base.getX() + 2.5, base.getY(), base.getZ() + 0.5, 0, 0);
             level.addFreshEntity(z2);
+            z2.goalSelector.removeAllGoals(g -> true);
+            z2.targetSelector.removeAllGoals(g -> true);
             String ref1 = z1.getUUID().toString();
             String ref2 = z2.getUUID().toString();
             step("M1", true, "造两只候选实体", "z1=" + ref1 + " z2=" + ref2);
@@ -74,17 +86,21 @@ public final class SelfTestScenario {
             Result blocked = EntityToolsRuntime.dispatch(model, "entity_self", "status", Map.of());
             ok &= step("M1", blocked instanceof Result.Error, "死亡后控制类工具显式拒绝", String.valueOf(blocked));
 
-            ok &= runM2(level, base, z2, ref2);
-            ok &= runM3(level, base);
-            ok &= runM5(level, base);
-            ok &= runM6(level, base);
+            ok &= runM2(level, rooms[1], z2, ref2);
+            ok &= runM3(level, rooms[2]);
+            ok &= runM5(level, rooms[4]);
+            ok &= runM6(level, rooms[5]);
+            ok &= runM7(level, rooms[6]);
         } catch (Throwable t) {
             ok = false;
             SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST] 场景异常", t);
         }
         // M1–M3 同步段完成；M4 需要真实物理 tick——交给 tick 驱动器（结束时统一 halt）
-        M4.start(server, level, base, ok);
+        M4.start(server, level, m4Room, ok);
     }
+
+    /** M4 的房间基准（tick 驱动器在同步段之后才启动，经此中转）。 */
+    private static BlockPos m4Room;
 
     /** M4 每 tick 驱动（与实体物理同拍）。 */
     @SubscribeEvent
@@ -92,10 +108,12 @@ public final class SelfTestScenario {
         M4.tick();
     }
 
-    /** M2：look 一致性 + 六条结束路径。z2 为绑定实体（M1 死亡流后重新开感官选取）。 */
+    /** M2：look 一致性 + 六条结束路径。z2 为绑定实体（M1 死亡流后重新开感官选取，从 M1 房搬入）。 */
     private static boolean runM2(ServerLevel level, BlockPos base, Zombie z2, String ref2) {
         boolean ok = true;
         String model = "selftest-m2";
+        EntityToolsRuntime.setScanAnchor(model, base);
+        z2.teleportTo(base.getX() + 2.5, base.getY(), base.getZ() + 0.5);   // 搬进本房（一测一房）
 
         Result open = EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
         ok &= step("M2", open instanceof Result.Ok, "重开感官", String.valueOf(data(open)));
@@ -111,6 +129,7 @@ public final class SelfTestScenario {
 
         // 目标实体 z3
         Zombie z3 = new Zombie(level);
+        z3.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
         z3.moveTo(base.getX() + 4.5, base.getY(), base.getZ() + 0.5, 0, 0);
         level.addFreshEntity(z3);
         String ref3 = z3.getUUID().toString();
@@ -156,6 +175,7 @@ public final class SelfTestScenario {
         Result s4 = EntityToolsRuntime.dispatch(model, "view", "status", Map.of());
         ok &= step("M2", String.valueOf(data(s4)).contains("TOO_FAR"),
                 "路径4 超距 64→TOO_FAR", String.valueOf(data(s4)));
+        level.setBlockAndUpdate(far, Blocks.AIR.defaultBlockState());   // 远距方块用后即清（房外专用位，防跨运行残留）
 
         // 路径 5：超时（duration=2；lookAt 内置首 tick=age1，再 tick=age2→TIMEOUT）
         level.setBlockAndUpdate(stone, Blocks.STONE.defaultBlockState());
@@ -183,6 +203,7 @@ public final class SelfTestScenario {
         // look_at 实体的对准角≈FacingMath 预期（facing 组件共用出处）——用新鲜 z5
         // （z4 在 70 格外可能被卸载，复用被卸载实体测不出对准——2026-10-23 踩过）
         Zombie z5 = new Zombie(level);
+        z5.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
         z5.moveTo(base.getX() + 3.5, base.getY(), base.getZ() + 2.5, 0, 0);
         level.addFreshEntity(z5);
         Result la = EntityToolsRuntime.dispatch(model, "view", "look_at",
@@ -204,12 +225,16 @@ public final class SelfTestScenario {
     private static boolean runM3(ServerLevel level, BlockPos base) {
         boolean ok = true;
         String model = "selftest-m3";
+        EntityToolsRuntime.setScanAnchor(model, base);
+        EntityToolsRuntime.setScanAnchor("selftest-m3-other", base);
 
         // 造化身 z6 与受害者 z7
         Zombie z6 = new Zombie(level);
+        z6.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
         z6.moveTo(base.getX() + 0.5, base.getY(), base.getZ() + 4.5, 0, 0);
         level.addFreshEntity(z6);
         Zombie z7 = new Zombie(level);
+        z7.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
         z7.moveTo(base.getX() + 1.5, base.getY(), base.getZ() + 6.5, 0, 0);
         level.addFreshEntity(z7);
         EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
@@ -227,6 +252,7 @@ public final class SelfTestScenario {
         // 寻址红线：他人编号实体一律拒绝
         String other = "selftest-m3-other";
         Zombie z8 = new Zombie(level);
+        z8.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
         z8.moveTo(base.getX() + 2.5, base.getY(), base.getZ() + 6.5, 0, 0);
         level.addFreshEntity(z8);
         EntityToolsRuntime.dispatch(other, "sense", "open", Map.of());
@@ -280,6 +306,12 @@ public final class SelfTestScenario {
         // 使用：音符盒按一下→音高变化（服务端状态回推）
         BlockPos p3 = base.offset(0, 1, -3);
         level.setBlockAndUpdate(p3, net.minecraft.world.level.block.Blocks.NOTE_BLOCK.defaultBlockState());
+        // 防御式读取：方块不是音符盒（如建房超建筑高度 setBlock 静默失败）→ FAIL 带因，不炸整个场景
+        if (!level.getBlockState(p3).hasProperty(net.minecraft.world.level.block.NoteBlock.NOTE)) {
+            ok &= step("M3", false, "use 方块交互生效",
+                    "p3 处不是音符盒（实际 " + level.getBlockState(p3) + "）——setBlock 可能静默失败（超高？）");
+            return ok;
+        }
         int noteBefore = level.getBlockState(p3).getValue(
                 net.minecraft.world.level.block.NoteBlock.NOTE);
         Result use = EntityToolsRuntime.dispatch(model, "interact", "use",
@@ -304,6 +336,7 @@ public final class SelfTestScenario {
         private static int phase;
         private static int wait;
         private static Zombie z9;
+        private static BlockPos cagePos;
         private static double sx, sy, sz;
         private static double maxY;
 
@@ -314,11 +347,12 @@ public final class SelfTestScenario {
             ok = okSoFar;
             phase = 0;
             wait = 0;
+            EntityToolsRuntime.setScanAnchor("selftest-m4", b);
             level.setDayTime(18000);   // 夜间——防僵尸白日燃烧干扰测量
         }
 
         static void tick() {
-            if (server == null || phase > 8) {
+            if (server == null || level == null || base == null || phase > 8) {
                 return;
             }
             try {
@@ -327,6 +361,7 @@ public final class SelfTestScenario {
                     case 0 -> {   // 造化身（剥 AI 目标=压掉游荡/攻击但保留物理——
                         // setNoAi 会连物理一起冻住（僵尸飘空、脚下无支撑），2026-10-23 踩过）
                         z9 = new Zombie(level);
+                        z9.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
                         z9.moveTo(base.getX() + 0.5, base.getY(), base.getZ() - 8.5, 180, 0);
                         level.addFreshEntity(z9);
                         z9.goalSelector.removeAllGoals(g -> true);
@@ -434,6 +469,10 @@ public final class SelfTestScenario {
                     case 7 -> {   // 阻塞：封进石笼 → 12 tick 无水平位移 → BLOCKED
                         if (wait == 0) {
                             BlockPos c = z9.blockPosition();
+                            // 居中到格心再封笼：偏心时命中框蹭墙→碰撞微推抖动骗过阻塞计数
+                            // （2026-10-23 踩过：位移≈0 却 PROGRESS——产品口径是冻结契约，修的是测试几何）
+                            z9.teleportTo(c.getX() + 0.5, z9.getY(), c.getZ() + 0.5);
+                            cagePos = c;
                             for (var d : new net.minecraft.core.Direction[]{
                                     net.minecraft.core.Direction.NORTH, net.minecraft.core.Direction.SOUTH,
                                     net.minecraft.core.Direction.EAST, net.minecraft.core.Direction.WEST}) {
@@ -449,7 +488,8 @@ public final class SelfTestScenario {
                             Result st = EntityToolsRuntime.dispatch(model, "move", "status", Map.of());
                             ok &= step("M4", String.valueOf(data(st)).contains("BLOCKED"),
                                     "卡墙上报阻塞（非假成功）", String.valueOf(data(st)));
-                            BlockPos c = z9.blockPosition();
+                            // 拆笼用建笼坐标（按 z9 现位拆会错位留墙——2026-10-23 踩过）
+                            BlockPos c = cagePos != null ? cagePos : z9.blockPosition();
                             for (var d : new net.minecraft.core.Direction[]{
                                     net.minecraft.core.Direction.NORTH, net.minecraft.core.Direction.SOUTH,
                                     net.minecraft.core.Direction.EAST, net.minecraft.core.Direction.WEST}) {
@@ -496,8 +536,13 @@ public final class SelfTestScenario {
     private static boolean runM5(ServerLevel level, BlockPos base) {
         boolean ok = true;
         String model = "selftest-m5";
+        EntityToolsRuntime.setScanAnchor(model, base);
+        String modelB = "selftest-m5b";   // 归属标注对照：第二模型编号（房内自足，不跨房借实体）
+        EntityToolsRuntime.setScanAnchor(modelB, base);
 
         Zombie z10 = new Zombie(level);
+
+        z10.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
         z10.moveTo(base.getX() + 0.5, base.getY(), base.getZ() - 14.5, 0, 0);
         level.addFreshEntity(z10);
         z10.goalSelector.removeAllGoals(g -> true);
@@ -508,6 +553,17 @@ public final class SelfTestScenario {
         Result pick = EntityToolsRuntime.dispatch(model, "entity", "pick",
                 Map.of("target", z10.getUUID().toString()));
         ok &= step("M5", pick instanceof Result.Ok, "绑定化身 z10", String.valueOf(data(pick)));
+
+        // 归属标注对照实体 z11：挂 modelB（世界查询须标 controller=selftest-m5b）
+        Zombie z11 = new Zombie(level);
+        z11.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
+        z11.moveTo(base.getX() + 3.5, base.getY(), base.getZ() - 10.5, 0, 0);
+        level.addFreshEntity(z11);
+        z11.goalSelector.removeAllGoals(g -> true);
+        z11.targetSelector.removeAllGoals(g -> true);
+        EntityToolsRuntime.dispatch(modelB, "sense", "open", Map.of());
+        EntityToolsRuntime.dispatch(modelB, "entity", "pick",
+                Map.of("target", z11.getUUID().toString()));
 
         // 双索引：registry 与显示名各命中同一件
         Result q1 = EntityToolsRuntime.dispatch(model, "item", "self_items",
@@ -560,11 +616,11 @@ public final class SelfTestScenario {
                         && String.valueOf(data(dp)).contains("fromRemaining=8"),
                 "drop 槽位核实（10→8）", String.valueOf(data(dp)));
 
-        // 世界查询①：中心+半径+含实体（归属标注：z2 仍绑定 selftest-m2；半径要罩住 15 格外的 z2）
+        // 世界查询①：中心+半径+含实体（归属标注：z11 挂 selftest-m5b——房内自足对照）
         Result w1 = EntityToolsRuntime.dispatch(model, "world", "query",
                 Map.of("radius", 20, "include_entities", true));
         ok &= step("M5", w1 instanceof Result.Ok
-                        && String.valueOf(data(w1)).contains("controller=selftest-m2")
+                        && String.valueOf(data(w1)).contains("controller=" + modelB)
                         && String.valueOf(data(w1)).contains("仅已加载区块"),
                 "world.query 中心形状（实体带 controller 归属 + 已加载声明）", String.valueOf(data(w1)));
 
@@ -587,20 +643,25 @@ public final class SelfTestScenario {
     private static boolean runM6(ServerLevel level, BlockPos base) {
         boolean ok = true;
         String model = "selftest-m6";
+        EntityToolsRuntime.setScanAnchor(model, base);
 
         Zombie z13 = new Zombie(level);
+
+        z13.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
         z13.moveTo(base.getX() + 9.5, base.getY(), base.getZ() - 16.5, 0, 0);
         level.addFreshEntity(z13);
         z13.goalSelector.removeAllGoals(g -> true);
         z13.targetSelector.removeAllGoals(g -> true);
         String ref13 = z13.getUUID().toString();
         Zombie z14 = new Zombie(level);
+        z14.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
         z14.moveTo(base.getX() + 11.5, base.getY(), base.getZ() - 16.5, 0, 0);
         level.addFreshEntity(z14);
         z14.goalSelector.removeAllGoals(g -> true);
         z14.targetSelector.removeAllGoals(g -> true);
         String ref14 = z14.getUUID().toString();
         Zombie z15 = new Zombie(level);
+        z15.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
         z15.moveTo(base.getX() + 13.5, base.getY(), base.getZ() - 16.5, 0, 0);
         level.addFreshEntity(z15);
         z15.goalSelector.removeAllGoals(g -> true);
@@ -710,6 +771,96 @@ public final class SelfTestScenario {
                 "主动查询枚举对账（kind∈TRAJECTORY|ATTACKED|DIED）",
                 String.valueOf(data(e5)).length() > 200
                         ? String.valueOf(data(e5)).substring(0, 200) : String.valueOf(data(e5)));
+        return ok;
+    }
+
+    /** M7：攻击玩家审批链（两段式 confirm_token）——首段签发不执行/坏令牌拒/跨目标 digest 失效/核销执行/单次使用。 */
+    private static boolean runM7(ServerLevel level, BlockPos base) {
+        boolean ok = true;
+        String model = "selftest-m7";
+        EntityToolsRuntime.setScanAnchor(model, base);
+
+        Zombie z16 = new Zombie(level);
+
+        z16.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
+        z16.moveTo(base.getX() + 15.5, base.getY(), base.getZ() - 16.5, 0, 0);
+        level.addFreshEntity(z16);
+        z16.goalSelector.removeAllGoals(g -> true);
+        z16.targetSelector.removeAllGoals(g -> true);
+        String ref16 = z16.getUUID().toString();
+        EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
+        EntityToolsRuntime.dispatch(model, "entity", "pick", Map.of("target", ref16));
+
+        // ① 非玩家目标直通（审批只针对玩家类型目标）
+        Zombie z17 = new Zombie(level);
+        z17.setPersistenceRequired();   // 测试实体=固定装置：禁止自然消失（checkDespawn 远距静默 discard 坑，2026-10-23 踩过）
+        z17.moveTo(base.getX() + 16.8, base.getY(), base.getZ() - 16.5, 0, 0);
+        level.addFreshEntity(z17);
+        z17.goalSelector.removeAllGoals(g -> true);
+        z17.targetSelector.removeAllGoals(g -> true);
+        String ref17 = z17.getUUID().toString();
+        Result direct = EntityToolsRuntime.dispatch(model, "interact", "attack",
+                Map.of("target", ref17));
+        ok &= step("M7", direct instanceof Result.Ok
+                        && !String.valueOf(data(direct)).contains("pending"),
+                "非玩家目标直通（无需审批）", String.valueOf(data(direct)));
+
+        // 造玩家类型目标（FakePlayer extends ServerPlayer → instanceof Player 命中审批）。
+        // 显式放房内——不 moveTo 会落世界原点，房外残留跨运行存续（测试卫生）。
+        var fp1 = new net.neoforged.neoforge.common.util.FakePlayer(level,
+                new com.mojang.authlib.GameProfile(java.util.UUID.randomUUID(), "m7-victim1"));
+        fp1.setPos(base.getX() + 6.5, base.getY(), base.getZ() + 2.5);
+        level.addFreshEntity(fp1);
+        String refFp1 = fp1.getUUID().toString();
+        var fp2 = new net.neoforged.neoforge.common.util.FakePlayer(level,
+                new com.mojang.authlib.GameProfile(java.util.UUID.randomUUID(), "m7-victim2"));
+        fp2.setPos(base.getX() + 8.5, base.getY(), base.getZ() + 2.5);
+        level.addFreshEntity(fp2);
+        String refFp2 = fp2.getUUID().toString();
+
+        // ② 首段：无令牌 → Warn 签发确认单，不执行（血量不动）
+        float hp1 = fp1.getHealth();
+        Result first = EntityToolsRuntime.dispatch(model, "interact", "attack",
+                Map.of("target", refFp1));
+        String fs = String.valueOf(data(first));
+        String token1 = data(first) instanceof Map<?, ?> m1 && m1.get("confirm_token") != null
+                ? String.valueOf(m1.get("confirm_token")) : "";
+        ok &= step("M7", first instanceof Result.Warn && !token1.isEmpty()
+                        && fp1.getHealth() == hp1,
+                "首段签发不执行（Warn+令牌，血量 " + hp1 + " 不动）",
+                fs.length() > 160 ? fs.substring(0, 160) : fs);
+
+        // ③ 坏令牌拒绝（真令牌不受影响）
+        Result bad = EntityToolsRuntime.dispatch(model, "interact", "attack",
+                Map.of("target", refFp1, "confirm_token", "bogus-token"));
+        ok &= step("M7", bad instanceof Result.Error,
+                "坏令牌拒绝（Error，不执行）", String.valueOf(bad));
+
+        // ④ 跨目标：fp1 的令牌拿去打 fp2 → digest 不符（防看 A 打 B）
+        Result cross = EntityToolsRuntime.dispatch(model, "interact", "attack",
+                Map.of("target", refFp2, "confirm_token", token1));
+        ok &= step("M7", cross instanceof Result.Error
+                        && String.valueOf(cross).contains("变化"),
+                "跨目标令牌失效（digest 绑定目标，防看 A 打 B）", String.valueOf(cross));
+
+        // ⑤ 重签 + 核销：带令牌二次调用 → 过审批（结果不再是 pending 签发）
+        Result reissue = EntityToolsRuntime.dispatch(model, "interact", "attack",
+                Map.of("target", refFp1));
+        String token2 = data(reissue) instanceof Map<?, ?> m2 && m2.get("confirm_token") != null
+                ? String.valueOf(m2.get("confirm_token")) : "";
+        Result exec = EntityToolsRuntime.dispatch(model, "interact", "attack",
+                Map.of("target", refFp1, "confirm_token", token2));
+        ok &= step("M7", exec != null && !token2.isEmpty()
+                        && !String.valueOf(data(exec)).contains("默认走审批"),
+                "核销令牌过审批（执行段，不再是签发）",
+                String.valueOf(data(exec)));
+
+        // ⑥ 单次使用：同令牌再来 → 无效
+        Result reuse = EntityToolsRuntime.dispatch(model, "interact", "attack",
+                Map.of("target", refFp1, "confirm_token", token2));
+        ok &= step("M7", reuse instanceof Result.Error
+                        && String.valueOf(reuse).contains("无效"),
+                "令牌单次使用（复用→无效）", String.valueOf(reuse));
         return ok;
     }
 

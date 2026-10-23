@@ -57,6 +57,16 @@ public final class EntityToolsRuntime {
         return TRIGGERS;
     }
 
+    /** 感知锚点覆盖：钉住某模型的扫描/查询中心（宿主可用；测试用它把各模型锚进各自房间）。 */
+    private static final Map<String, net.minecraft.core.BlockPos> SCAN_ANCHORS = new ConcurrentHashMap<>();
+
+    public static void setScanAnchor(String modelId, net.minecraft.core.BlockPos anchor) {
+        if (modelId == null || anchor == null) {
+            return;
+        }
+        SCAN_ANCHORS.put(modelId, anchor.immutable());
+    }
+
     /** 取（或建）某模型的模块。世界上下文：有玩家取其所在世界与位置；无玩家退回出生点（专用服务器自测可用）。 */
     public static EntityToolsModule module(String modelId) {
         return MODULES.computeIfAbsent(modelId, id -> new EntityToolsModule(id, new EntityToolsModule.Ctx() {
@@ -72,6 +82,10 @@ public final class EntityToolsRuntime {
 
             @Override
             public net.minecraft.core.BlockPos center() {
+                net.minecraft.core.BlockPos anchor = SCAN_ANCHORS.get(id);
+                if (anchor != null) {
+                    return anchor;
+                }
                 MinecraftServer s = ServerLifecycleHooks.getCurrentServer();
                 if (s == null) {
                     return null;

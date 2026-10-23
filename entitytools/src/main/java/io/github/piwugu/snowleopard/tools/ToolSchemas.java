@@ -110,11 +110,13 @@ public final class ToolSchemas {
 
     public static final java.util.List<ToolRegistry.Tool> INTERACT_TOOLS = java.util.List.of(
             new ToolRegistry.Tool(INTERACT_ATTACK, "攻击目标实体（完成判定=血量变化回推）",
-                    "interact.attack(target) → {ok, healthBefore, healthAfter}",
+                    "interact.attack(target, confirm_token?) → {ok, healthBefore, healthAfter}",
                     Map.of("type", "object", "required", java.util.List.of("target"),
                             "target", "候选编号（显式目标优先）",
+                            "confirm_token", "攻击玩家类型目标时必经两段式：首段返回 pending+令牌（不执行），带令牌二次调用才执行",
                             "reversible", "false", "state", "changes_world",
-                            "红线", "其他编号实体一律拒绝")),
+                            "红线", "其他编号实体一律拒绝",
+                            "审批", "攻击真人/玩家默认走审批（digest 绑定目标+血量，变化即失效）")),
             new ToolRegistry.Tool(INTERACT_USE, "对方块使用/交互（完成判定=方块状态回推）",
                     "interact.use(target) → {ok, result}",
                     Map.of("type", "object", "required", java.util.List.of("target"),

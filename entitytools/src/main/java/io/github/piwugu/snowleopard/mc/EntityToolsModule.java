@@ -48,6 +48,9 @@ public final class EntityToolsModule {
             new io.github.piwugu.snowleopard.tools.MoveMachine();
     private final io.github.piwugu.snowleopard.tools.WatchFeed watchFeed =
             new io.github.piwugu.snowleopard.tools.WatchFeed();
+    /** 两段式确认闸（M7 攻击玩家审批）：每模块一份——令牌按模型隔离，互不通用。 */
+    private final snowleopard.core.confirm.ConfirmGate confirmGate =
+            new snowleopard.core.confirm.ConfirmGate();
     private double lastMoveX, lastMoveY, lastMoveZ;
     private boolean movePrimed;
     private float lastSetYaw;
@@ -481,6 +484,27 @@ public final class EntityToolsModule {
         Entity e = level == null ? null : level.getEntity(java.util.UUID.fromString(target));
         if (!(e instanceof LivingEntity victim) || !victim.isAlive()) {
             return Result.error("攻击目标不可用（不存在或已死亡）");
+        }
+        // 攻击玩家类型目标默认走审批（M7 危险动作权限分级）：两段式 confirm_token（发给模型自身的
+        // 确认，非外部审批）；digest 绑定目标+当前血量——两段之间目标被换/血量变了令牌即失效。
+        if (victim instanceof net.minecraft.world.entity.player.Player) {
+            String action = "interact.attack_player";
+            String digest = snowleopard.core.confirm.ConfirmGate.digest(
+                    "attack-player", target + ":" + victim.getHealth());
+            String token = String.valueOf(params.get("confirm_token"));
+            if (token == null || token.isBlank() || "null".equals(token)) {
+                var ch = confirmGate.issue(action,
+                        "攻击玩家目标 " + target + "（当前血量 " + victim.getHealth()
+                                + "）——不可逆；确认后带 confirm_token 再次调用", digest);
+                return Result.warn(java.util.Map.of(
+                                "pending", action, "confirm_token", ch.token(),
+                                "preview", ch.preview(), "target", target),
+                        "攻击玩家默认走审批：两段式确认（首段不执行，核销令牌后执行）");
+            }
+            Result cr = confirmGate.confirm(action, token, digest);
+            if (cr instanceof Result.Error) {
+                return cr;   // 令牌无效/过期/目标已变——不执行攻击
+            }
         }
         faceToward(self, victim.getX(), victim.getY() + victim.getBbHeight() * 0.5, victim.getZ());
         float before = victim.getHealth();
