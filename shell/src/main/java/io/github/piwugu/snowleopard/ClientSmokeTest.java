@@ -59,6 +59,15 @@ final class ClientSmokeTest {
         SnowLeopardMod.LOG.info("[雪豹框架][CLIENT] ===== 客户端验收开始（玩家 {}，位置 {}）=====",
                 player.getGameProfile().getName(), base);
 
+        // 清掉上次验收残留的载体（同名会撞"禁重名"，残骸也没必要留）
+        java.util.List<io.github.piwugu.snowleopard.AvatarEntity> leftovers = new java.util.ArrayList<>();
+        for (net.minecraft.world.entity.Entity e : level.getAllEntities()) {
+            if (e instanceof io.github.piwugu.snowleopard.AvatarEntity av) {
+                leftovers.add(av);
+            }
+        }
+        leftovers.forEach(net.minecraft.world.entity.Entity::discard);
+
         // ① 中立生物：僵尸猪灵（受击才反击），放在玩家侧前方 3 格
         ZombifiedPiglin pig = new ZombifiedPiglin(
                 net.minecraft.world.entity.EntityType.ZOMBIFIED_PIGLIN, level);
@@ -90,6 +99,25 @@ final class ClientSmokeTest {
 
         // ⑤ 一条更花的、便于肉眼确认的行（含点击建议不可用，只做视觉锚点）
         ChatPush.push("客户端验收完成：绑定 " + ref.substring(0, 8) + "… · 聊天栏推送已接通");
+
+        // ⑥ 载体（M13）：生成一只载体并绑为主载体——玩家可直接右键它测互动唤醒，
+        //    在聊天栏说"小白"可测点名唤醒；名字同时是身份（[雪豹·小白]）
+        io.github.piwugu.snowleopard.AvatarEntity avatar =
+                new io.github.piwugu.snowleopard.AvatarEntity(
+                        io.github.piwugu.snowleopard.AvatarEntities.AVATAR.get(), level);
+        avatar.setPersistenceRequired();
+        avatar.moveTo(player.getX() + 1.5, player.getY(), player.getZ() + 2.5, 0, 0);
+        level.addFreshEntity(avatar);
+        avatar.setCustomName(net.minecraft.network.chat.Component.literal("小白"));
+        // 重新扫描：pick 只认 open 候选集里的 ref（不 open 直接 pick 会静默失败，
+        // 绑定还停留在猪灵上 → avatar_bind 报"不是载体"）
+        EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
+        EntityToolsRuntime.dispatch(model, "entity", "pick",
+                Map.of("target", avatar.getStringUUID()));
+        Result bindAv = EntityToolsRuntime.dispatch(model, "avatar", "avatar_bind", Map.of());
+        ok("载体就位（豹猫外观，右键/点名可唤醒）", bindAv instanceof Result.Ok,
+                brief(bindAv) + " | 位置：你身前 2.5 格");
+
         SnowLeopardMod.LOG.info("[雪豹框架][CLIENT] ===== 客户端验收结束（看游戏内聊天栏）=====");
     }
 
