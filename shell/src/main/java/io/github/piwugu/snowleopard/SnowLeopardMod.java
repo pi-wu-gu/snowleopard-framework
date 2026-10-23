@@ -101,7 +101,13 @@ public final class SnowLeopardMod {
                     net.neoforged.bus.api.EventPriority.LOWEST, true, ChatRuntime::onServerChat);
             // 启动时清一次过期聊天（不在 tick 里扫盘）
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(
-                    (net.neoforged.neoforge.event.server.ServerStartedEvent e) -> ChatRuntime.pruneOnStart());
+                    (net.neoforged.neoforge.event.server.ServerStartedEvent e) -> {
+                        ChatRuntime.pruneOnStart();
+                        // 玩家测试区（2×2 区块棋盘格）：只在客户端验收模式建，不污染别的世界
+                        if (Boolean.getBoolean("snowleopard.clienttest")) {
+                            PlayerTestArea.ensureBuilt(e.getServer());
+                        }
+                    });
             // 载体唤醒源（M13）：右键 / 被打（可配）/ 每 20 tick 调度 / 死亡解绑
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(AvatarWake::onInteract);
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(

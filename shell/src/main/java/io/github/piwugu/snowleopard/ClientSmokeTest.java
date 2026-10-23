@@ -121,6 +121,12 @@ final class ClientSmokeTest {
         ok("载体就位（豹猫外观，右键/点名可唤醒）", bindAv instanceof Result.Ok,
                 brief(bindAv) + " | 位置：你身前 2.5 格");
 
+        // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
+        String area = PlayerTestArea.describe();
+        if (area != null) {
+            ChatPush.push(area);
+        }
+
         SnowLeopardMod.LOG.info("[雪豹框架][CLIENT] ===== 客户端验收结束（看游戏内聊天栏）=====");
     }
 

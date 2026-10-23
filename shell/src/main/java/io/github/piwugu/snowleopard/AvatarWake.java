@@ -53,6 +53,8 @@ public final class AvatarWake {
 
     private static AvatarStore store;
     private static boolean onDamage = true;
+    /** 玩家侧回执开关（裁决 2026-10-24 02:10：反馈属系统信息，**默认关**；要看得自己开）。 */
+    private static boolean feedback = false;
     private static long cooldownMs = DEFAULT_COOLDOWN_MS;
     private static final Map<String, Long> LAST_WAKE = new ConcurrentHashMap<>();
     /** 冷却回执每窗口只发一次（连点右键不能刷屏，但第一次必须让人知道为什么没反应）。 */
@@ -89,6 +91,7 @@ public final class AvatarWake {
 
     private static void loadConfig(Path gameDir) {
         onDamage = true;
+        feedback = false;
         cooldownMs = DEFAULT_COOLDOWN_MS;
         if (gameDir == null) {
             return;
@@ -102,11 +105,21 @@ public final class AvatarWake {
             if (m.get("on_damage") instanceof Boolean b) {
                 onDamage = b;
             }
+            if (m.get("feedback") instanceof Boolean b) {
+                feedback = b;
+            }
             if (m.get("cooldown_ms") instanceof Number n && n.longValue() >= 0) {
                 cooldownMs = n.longValue();
             }
         } catch (Exception e) {
             SnowLeopardMod.LOG.warn("[雪豹框架][载体] 配置读不懂，用默认值: {} ({})", f, e.getMessage());
+        }
+    }
+
+    /** 玩家侧回执（配置 {@code feedback} 关闭时为 no-op——反馈属系统信息，默认不打扰）。 */
+    private static void note(ServerPlayer player, String msg) {
+        if (feedback) {
+            ChatPush.pushTo(player, msg);
         }
     }
 
@@ -184,7 +197,7 @@ public final class AvatarWake {
             if (feedbackTo != null
                     && !Long.valueOf(window).equals(LAST_COOLDOWN_NOTE.get(avatar.getStringUUID()))) {
                 long remainSec = (cooldownMs - (now - last) + 999) / 1000;
-                ChatPush.pushTo(feedbackTo, name + "：冷却中，约 " + remainSec + " 秒后再试");
+                note(feedbackTo, name + "：冷却中，约 " + remainSec + " 秒后再试");
                 LAST_COOLDOWN_NOTE.put(avatar.getStringUUID(), window);
             }
             return;
@@ -241,17 +254,17 @@ public final class AvatarWake {
             String shown = ChatRuntime.displayName(model);
             if (!ChatMention.mentionsName(safeText, shown)) {
                 // 只按编号命中：不唤醒（提示已由 M12 记）——但要让玩家知道"看见了"
-                ChatPush.pushTo(speaker, shown + "：已记录提示（编号提及不唤醒，名称才会）");
+                note(speaker, shown + "：已记录提示（编号提及不唤醒，名称才会）");
                 continue;
             }
             AvatarStore.Entry primary = store.primaryOf(model);
             if (primary == null) {
-                ChatPush.pushTo(speaker, shown + "：被提及，但没有主载体，未唤醒");
+                note(speaker, shown + "：被提及，但没有主载体，未唤醒");
                 continue;   // 没载体：只提示，不唤醒
             }
             Entity carrier = findEntity(server(), primary.uuid());
             if (!(carrier instanceof AvatarEntity avatar)) {
-                ChatPush.pushTo(speaker, shown + "：被提及，但载体未加载，本轮只提示");
+                note(speaker, shown + "：被提及，但载体未加载，本轮只提示");
                 continue;   // 主载体未加载：本轮只提示（M12 已记），下次点名还会尝试
             }
             wakeFromPlayer("ext-mention-" + safe(playerName), avatar, "mention:name",
@@ -362,16 +375,11 @@ public final class AvatarWake {
             SnowLeopardMod.LOG.warn("[雪豹框架][唤醒] {} → {} 失败：{}（已补一条提示）",
                     reason, model, err.desc());
             ChatRuntime.addPendingMention(model);
-            if (feedbackTo != null) {
-                ChatPush.pushTo(feedbackTo, carrierName + "：唤醒被拒（"
-                        + brief(err.desc()) + "）· 已转为提示");
-            }
+            note(feedbackTo, carrierName + "：唤醒被拒（" + brief(err.desc()) + "）· 已转为提示");
         } else {
             SnowLeopardMod.LOG.info("[雪豹框架][唤醒] {} → {} 已登记为 pending", reason, model);
-            if (feedbackTo != null) {
-                ChatPush.pushTo(feedbackTo, carrierName + "：唤醒已登记（" + reason
-                        + " → " + model + "）· 等待执行端拉取");
-            }
+            note(feedbackTo, carrierName + "：唤醒已登记（" + reason + " → " + model
+                    + "）· 等待执行端拉取");
         }
     }
 
