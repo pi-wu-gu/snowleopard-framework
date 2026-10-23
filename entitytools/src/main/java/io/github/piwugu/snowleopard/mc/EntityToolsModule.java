@@ -1157,6 +1157,23 @@ public final class EntityToolsModule {
                             "controller", controller));
                 }
             }
+            // 掉落物（minecraft:item）不是 LivingEntity——不单独扫就"看不见"。
+            // 2026-10-24 03:38 踩过：模型破坏方块后查证"没有掉落物"，实际掉落就在脚下
+            for (net.minecraft.world.entity.item.ItemEntity it
+                    : level.getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, area)) {
+                totalEntities++;
+                if (entities.size() < cap) {
+                    var stack = it.getItem();
+                    entities.add(Map.of("ref", it.getUUID().toString(),
+                            "type", "minecraft:item",
+                            "registry", net.minecraft.core.registries.BuiltInRegistries.ITEM
+                                    .getKey(stack.getItem()).toString(),
+                            "name", stack.getHoverName().getString(),
+                            "count", stack.getCount(),
+                            "x", it.getX(), "y", it.getY(), "z", it.getZ(),
+                            "controller", ""));
+                }
+            }
         }
 
         Map<String, Object> out = new java.util.LinkedHashMap<>();
