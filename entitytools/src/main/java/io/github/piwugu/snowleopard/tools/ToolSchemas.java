@@ -22,6 +22,12 @@ public final class ToolSchemas {
     public static final String ENTITY_UNBIND = "unbind";
     public static final String ENTITY_STATUS = "status";
 
+    // ── view（视角，M2）──
+    public static final String VIEW_LOOK = "look";
+    public static final String VIEW_LOOK_AT = "look_at";
+    public static final String VIEW_UNLOCK = "unlock";
+    public static final String VIEW_STATUS = "status";
+
     // ── entity_self（自我观测）──
     public static final String SELF_STATUS = "status";
 
@@ -52,6 +58,25 @@ public final class ToolSchemas {
             new ToolRegistry.Tool(SELF_STATUS, "自我状态观测：位置朝向/血饥饿/状态效果/装备/维度环境",
                     "entity_self.status() → {x,y,z,yaw,pitch,health,maxHealth,food,effects,armor,dimension,onFire,inWater}",
                     Map.of("type", "object", "note", "无参数；仅 BOUND 态可用")));
+
+    public static final java.util.List<ToolRegistry.Tool> VIEW_TOOLS = java.util.List.of(
+            new ToolRegistry.Tool(VIEW_LOOK, "设置视角朝向角度（度）",
+                    "view.look(yaw, pitch) → {yaw, pitch}",
+                    Map.of("type", "object", "required", java.util.List.of("yaw", "pitch"),
+                            "yaw", "度（0=+z 南，-90=+x 东）", "pitch", "度（负=抬头）")),
+            new ToolRegistry.Tool(VIEW_LOOK_AT, "锁定视角到方块/实体（六条结束路径自动上报原因）",
+                    "view.look_at(target_type, target, face?, duration_ticks?) → {locked, kind, target}",
+                    Map.of("type", "object", "required", java.util.List.of("target_type", "target"),
+                            "target_type", "block|entity",
+                            "target", "block: \"x,y,z\"；entity: 候选编号",
+                            "face", "可选 up|down|north|south|east|west（缺省=方块中心）",
+                            "duration_ticks", "可选时长（缺省=不限时，仍受其余五条约束）")),
+            new ToolRegistry.Tool(VIEW_UNLOCK, "显式解锁（结束原因=EXPLICIT_UNLOCK）",
+                    "view.unlock() → {locked:false, reason}",
+                    Map.of("type", "object", "note", "无参数")),
+            new ToolRegistry.Tool(VIEW_STATUS, "查询视角与锁定状态",
+                    "view.status() → {yaw, pitch, locked, kind?, target?, age?, lastEnd?}",
+                    Map.of("type", "object", "note", "无参数")));
 
     private ToolSchemas() {
     }

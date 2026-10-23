@@ -48,7 +48,7 @@ public final class EntityToolsProvider extends ToolGroupProvider.Simple {
                 new EntityToolsProvider(GroupNames.ENTITY_SELF, "entity/self",
                         "自我状态观测", ToolSchemas.SELF_TOOLS),
                 new EntityToolsProvider(GroupNames.MOVE, "move", "移动（三驱动/寻路/阻塞判定）", List.of()),
-                new EntityToolsProvider(GroupNames.VIEW, "view", "视角朝向与锁定", List.of()),
+                new EntityToolsProvider(GroupNames.VIEW, "view", "视角朝向与锁定", ToolSchemas.VIEW_TOOLS),
                 new EntityToolsProvider(GroupNames.INTERACT, "interact", "交互（攻击/使用/放置/破坏）", List.of()),
                 new EntityToolsProvider(GroupNames.ITEM, "item", "物品（双索引检索/容器/移动）", List.of()),
                 new EntityToolsProvider(GroupNames.WORLD, "world", "世界区域查询（单一工具）", List.of()),

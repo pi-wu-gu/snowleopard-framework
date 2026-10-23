@@ -94,6 +94,14 @@ public final class EntityToolsRuntime {
         }
     }
 
+    /** 服务端每 tick：视角锁定执行与六条结束路径评估（M2）。 */
+    @SubscribeEvent
+    public static void onServerTick(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
+        for (EntityToolsModule m : MODULES.values()) {
+            m.tickViewLock();
+        }
+    }
+
     /** 空场景自测用：模块数与登记快照。 */
     public static Map<String, String> bindingSnapshot() {
         Map<String, String> out = new ConcurrentHashMap<>();

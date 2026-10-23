@@ -11,6 +11,8 @@ import net.minecraft.world.entity.player.Player;
 
 import io.github.piwugu.snowleopard.tools.BindingRegistry;
 import io.github.piwugu.snowleopard.tools.CandidateInfo;
+import io.github.piwugu.snowleopard.tools.FacingMath;
+import io.github.piwugu.snowleopard.tools.LookLockMachine;
 import io.github.piwugu.snowleopard.tools.SenseMachine;
 import io.github.piwugu.snowleopard.tools.SenseState;
 import io.github.piwugu.snowleopard.tools.ToolSchemas;
@@ -37,6 +39,10 @@ public final class EntityToolsModule {
     private final SenseMachine sense = new SenseMachine();
     private final BindingRegistry bindings = new BindingRegistry();
     private final DormancyManager dormancy = new DormancyManager();
+    private final LookLockMachine lookLock = new LookLockMachine();
+    private float lastSetYaw;
+    private float lastSetPitch;
+    private String lockFace = "";
     private volatile List<CandidateInfo> lastCandidates = List.of();
 
     public EntityToolsModule(String modelId, Ctx ctx) {
@@ -82,6 +88,13 @@ public final class EntityToolsModule {
                 case io.github.piwugu.snowleopard.tools.GroupNames.ENTITY_SELF -> switch (tool) {
                     case ToolSchemas.SELF_STATUS -> selfStatus();
                     default -> Result.error("entity_self 组无此工具: " + tool);
+                };
+                case io.github.piwugu.snowleopard.tools.GroupNames.VIEW -> switch (tool) {
+                    case ToolSchemas.VIEW_LOOK -> look(params);
+                    case ToolSchemas.VIEW_LOOK_AT -> lookAt(params);
+                    case ToolSchemas.VIEW_UNLOCK -> unlockView();
+                    case ToolSchemas.VIEW_STATUS -> viewStatus();
+                    default -> Result.error("view 组无此工具: " + tool);
                 };
                 default -> Result.error("工具组未实现或未知: " + group + "（M2–M6 逐步开放）");
             };
@@ -221,6 +234,173 @@ public final class EntityToolsModule {
         d.put("model", modelId);
         d.put("entity", sense.boundEntity());
         return Result.ok(d);
+    }
+
+    // ── view（M2）──
+
+    Result look(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        Object y = params.get("yaw");
+        Object p = params.get("pitch");
+        if (!(y instanceof Number yn) || !(p instanceof Number pn)) {
+            return Result.error("look 需要数值参数 yaw 与 pitch（度）");
+        }
+        float yaw = yn.floatValue();
+        float pitch = pn.floatValue();
+        self.setYRot(yaw);
+        self.setXRot(pitch);
+        lastSetYaw = yaw;
+        lastSetPitch = pitch;
+        return Result.ok(Map.of("yaw", (double) yaw, "pitch", (double) pitch));
+    }
+
+    /** 锁定视角到方块/实体（可选面、可选时长）。 */
+    Result lookAt(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        String type = String.valueOf(params.get("target_type"));
+        String target = String.valueOf(params.get("target"));
+        if (target == null || target.isBlank() || "null".equals(target)) {
+            return Result.error("look_at 需要 target");
+        }
+        int duration = params.get("duration_ticks") instanceof Number n ? n.intValue() : 0;
+        LookLockMachine.Kind kind;
+        if ("block".equals(type)) {
+            kind = LookLockMachine.Kind.BLOCK;
+            lockFace = String.valueOf(params.getOrDefault("face", ""));
+            parseBlock(target);   // 非法坐标立即报错，不进锁定
+        } else if ("entity".equals(type)) {
+            kind = LookLockMachine.Kind.ENTITY;
+            lockFace = "";
+        } else {
+            return Result.error("target_type 需为 block 或 entity");
+        }
+        Result r = lookLock.start(kind, target, duration);
+        if (r instanceof Result.Error) {
+            return r;
+        }
+        // 新锁定以当前朝向为漂移基线——否则上一把锁/look() 留下的基线会把新锁
+        // 当"外力夺控"在首 tick 秒杀（2026-10-23 真机自测逮到的真 bug）
+        lastSetYaw = self.getYRot();
+        lastSetPitch = self.getXRot();
+        tickViewLock();   // 立即对准一次
+        return Result.ok(Map.of("locked", true, "kind", kind.name(), "target", target,
+                "face", lockFace, "durationTicks", duration));
+    }
+
+    Result unlockView() {
+        return lookLock.unlock();
+    }
+
+    Result viewStatus() {
+        Map<String, Object> d = new java.util.LinkedHashMap<>();
+        LivingEntity self = sense.boundEntity() == null ? null
+                : boundLiving(ctx.level());
+        if (self != null) {
+            d.put("yaw", (double) self.getYRot());
+            d.put("pitch", (double) self.getXRot());
+        }
+        d.put("locked", lookLock.locked());
+        if (lookLock.locked()) {
+            d.put("kind", lookLock.kind().name());
+            d.put("target", lookLock.target());
+            d.put("age", lookLock.age());
+        }
+        if (lookLock.lastEnd() != null) {
+            d.put("lastEnd", lookLock.lastEnd().name());
+        }
+        return Result.ok(d);
+    }
+
+    /**
+     * 每 tick 锁定执行（壳侧 ServerTickEvent 调；自测同步直调同一方法）。
+     * 六条结束路径的输入（目标存在/距离/漂移）在此读世界事实，状态语义在 {@link LookLockMachine}。
+     */
+    public void tickViewLock() {
+        if (!lookLock.locked()) {
+            return;
+        }
+        ServerLevel level = ctx.level();
+        LivingEntity self = boundLiving(level);
+        if (level == null || self == null) {
+            return;
+        }
+        boolean targetPresent;
+        double distance;
+        FacingMath.Angle aim;
+        String target = lookLock.target();
+        if (lookLock.kind() == LookLockMachine.Kind.BLOCK) {
+            net.minecraft.core.BlockPos pos = parseBlock(target);
+            targetPresent = !level.getBlockState(pos).isAir();
+            double cx = pos.getX() + 0.5, cy = pos.getY() + 0.5, cz = pos.getZ() + 0.5;
+            double[] faceOff = faceOffset(lockFace);
+            cx += faceOff[0];
+            cy += faceOff[1];
+            cz += faceOff[2];
+            distance = Math.sqrt(self.distanceToSqr(cx, cy, cz));
+            aim = FacingMath.aim(self.getX(), self.getY() + self.getEyeHeight(), self.getZ(), cx, cy, cz);
+        } else {
+            Entity e = level.getEntity(java.util.UUID.fromString(target));
+            targetPresent = e != null && e.isAlive();
+            distance = targetPresent ? self.distanceTo(e) : 0;
+            double ex = targetPresent ? e.getX() : 0, ey = targetPresent ? e.getY() + e.getBbHeight() * 0.5 : 0,
+                    ez = targetPresent ? e.getZ() : 0;
+            aim = FacingMath.aim(self.getX(), self.getY() + self.getEyeHeight(), self.getZ(), ex, ey, ez);
+        }
+        boolean drifted = FacingMath.deltaDeg(self.getYRot(), lastSetYaw) > LookLockMachine.DRIFT_EPS_DEG
+                || FacingMath.deltaDeg(self.getXRot(), lastSetPitch) > LookLockMachine.DRIFT_EPS_DEG;
+        Result r = lookLock.tick(targetPresent, distance, drifted);
+        if (r instanceof Result.Ok ok && ok.data() instanceof Map<?, ?> m
+                && Boolean.TRUE.equals(m.get("locked"))) {
+            self.setYRot((float) aim.yaw());
+            self.setXRot((float) aim.pitch());
+            lastSetYaw = (float) aim.yaw();
+            lastSetPitch = (float) aim.pitch();
+        }
+    }
+
+    private LivingEntity requireBound() {
+        if (!sense.toolsEnabled()) {
+            return null;
+        }
+        return boundLiving(ctx.level());
+    }
+
+    private LivingEntity boundLiving(ServerLevel level) {
+        if (level == null || sense.boundEntity() == null) {
+            return null;
+        }
+        Entity e = level.getEntity(java.util.UUID.fromString(sense.boundEntity()));
+        return e instanceof LivingEntity le ? le : null;
+    }
+
+    private static net.minecraft.core.BlockPos parseBlock(String target) {
+        String[] parts = target.split(",");
+        if (parts.length != 3) {
+            throw new IllegalArgumentException("block 目标形如 \"x,y,z\"");
+        }
+        return new net.minecraft.core.BlockPos(
+                (int) Math.floor(Double.parseDouble(parts[0].trim())),
+                (int) Math.floor(Double.parseDouble(parts[1].trim())),
+                (int) Math.floor(Double.parseDouble(parts[2].trim())));
+    }
+
+    /** 面偏移：方块中心指向面中心。 */
+    private static double[] faceOffset(String face) {
+        return switch (face == null ? "" : face.toLowerCase(java.util.Locale.ROOT)) {
+            case "up" -> new double[]{0, 0.5, 0};
+            case "down" -> new double[]{0, -0.5, 0};
+            case "north" -> new double[]{0, 0, -0.5};
+            case "south" -> new double[]{0, 0, 0.5};
+            case "west" -> new double[]{-0.5, 0, 0};
+            case "east" -> new double[]{0.5, 0, 0};
+            default -> new double[]{0, 0, 0};   // 缺省=中心
+        };
     }
 
     // ── 死亡流（壳侧事件钩子调用）──
