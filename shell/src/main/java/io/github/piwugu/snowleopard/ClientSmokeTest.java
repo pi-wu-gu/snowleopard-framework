@@ -133,6 +133,15 @@ final class ClientSmokeTest {
         ok("载体就位（豹猫外观，右键/点名可唤醒）", bindAv instanceof Result.Ok,
                 brief(bindAv) + " | 位置：你身前 2.5 格");
 
+        // ⑥·补 备货：一组木头 + 一组石头进九格背包（用户 2026-10-24 03:29 要求；每次进服重置这两格）
+        if (avatar instanceof io.github.piwugu.snowleopard.tools.PackCarrier pc) {
+            pc.pack().setItem(0, new net.minecraft.world.item.ItemStack(
+                    net.minecraft.world.item.Items.OAK_LOG, 64));
+            pc.pack().setItem(1, new net.minecraft.world.item.ItemStack(
+                    net.minecraft.world.item.Items.STONE, 64));
+            ChatPush.push("小白背包已备货：橡木原木×64（self:pack:0）· 石头×64（self:pack:1）");
+        }
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {
@@ -147,7 +156,8 @@ final class ClientSmokeTest {
                     new snowleopard.core.wake.WakeStore.Chain(java.util.List.of("ext-clock")),
                     "ext-clock", model,
                     "host 自检：请用 chat_send 向玩家 " + player.getGameProfile().getName()
-                            + " 打一句招呼（简短自然），然后结束本轮。",
+                            + " 打一句招呼；然后破坏你身旁任意泥土/草方块（interact_break），"
+                            + "观察是否产生掉落物并用 chat_send 告诉玩家结果；然后结束本轮。",
                     "host-selftest", "host-selftest-" + System.currentTimeMillis());
             ok("host 自检唤醒已登记", !(wake instanceof Result.Error), brief(wake));
         }

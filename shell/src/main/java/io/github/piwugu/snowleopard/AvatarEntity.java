@@ -26,7 +26,8 @@ import net.minecraft.world.level.Level;
  *   <li>死亡 vs 卸载必须分开：死亡走 {@code AvatarWake.onDeath} 解绑；卸载什么都不做。</li>
  * </ul>
  */
-public class AvatarEntity extends PathfinderMob {
+public class AvatarEntity extends PathfinderMob
+        implements io.github.piwugu.snowleopard.tools.PackCarrier {
 
     /** 绑定的模型编号（镜像；权威在 AvatarStore）。 */
     private String boundModel = "";
@@ -64,6 +65,11 @@ public class AvatarEntity extends PathfinderMob {
     @Override
     public void addAdditionalSaveData(CompoundTag tag) {
         super.addAdditionalSaveData(tag);
+        net.minecraft.nbt.CompoundTag pt = new net.minecraft.nbt.CompoundTag();
+        for (int i = 0; i < pack.getContainerSize(); i++) {
+            pt.put("s" + i, pack.getItem(i).save(this.registryAccess()));
+        }
+        tag.put("Pack", pt);
         if (!boundModel.isEmpty()) {
             tag.putString("SnowModelId", boundModel);
         }
@@ -72,7 +78,22 @@ public class AvatarEntity extends PathfinderMob {
     @Override
     public void readAdditionalSaveData(CompoundTag tag) {
         super.readAdditionalSaveData(tag);
+        if (tag.contains("Pack")) {
+            net.minecraft.nbt.CompoundTag pt = tag.getCompound("Pack");
+            for (int i = 0; i < pack.getContainerSize(); i++) {
+                pack.setItem(i, net.minecraft.world.item.ItemStack.parseOptional(this.registryAccess(), pt.getCompound("s" + i)));
+            }
+        }
         boundModel = tag.contains("SnowModelId") ? tag.getString("SnowModelId") : "";
+    }
+
+    // ── 随身背包（九格，NBT 持久化；经 PackCarrier 接口暴露给物品工具）──
+
+    private final net.minecraft.world.SimpleContainer pack = new net.minecraft.world.SimpleContainer(9);
+
+    @Override
+    public net.minecraft.world.Container pack() {
+        return pack;
     }
 
     /** 调试用/文档用：标识这个实体是载体。 */

@@ -619,7 +619,15 @@ public final class EntityToolsModule {
         boolean gone = level.getBlockState(miningTarget).isAir();
         var outcome = mining.tick(gone);
         if (outcome == io.github.piwugu.snowleopard.tools.MiningTask.Outcome.READY) {
-            level.removeBlock(miningTarget, false);   // 到时长执行移除
+            // 到时长执行移除——**带掉落**（用户 2026-10-24 03:29 反馈"破坏方块没有掉落物"；
+            // 旧 removeBlock(pos,false) 什么都不掉）。dropResources 走方块 loot 表并带上手上工具
+            // → 原木徒手可掉、石头需镐（原版语义一致；想掉石头就让模型给自己配镐）
+            var state = level.getBlockState(miningTarget);
+            var be = level.getBlockEntity(miningTarget);
+            LivingEntity miner = requireBound();   // tick 上下文：绑定实体可能已解绑（null = 无工具掉落）
+            net.minecraft.world.level.block.Block.dropResources(state, level, miningTarget, be, miner,
+                    miner == null ? net.minecraft.world.item.ItemStack.EMPTY : miner.getMainHandItem());
+            level.removeBlock(miningTarget, false);
             // 服务端回推封签：方块真没了才算 COMPLETED——不留 READY 半态（占着挖掘位挡新任务）
             mining.tick(level.getBlockState(miningTarget).isAir());
         }
@@ -832,24 +840,34 @@ public final class EntityToolsModule {
         return (q == null || s.isBlank() || "null".equals(s)) ? null : s;
     }
 
-    /** 槽位引用：{@code x,y,z:槽号}（容器）或 {@code self:mainhand|offhand|head|chest|legs|feet}。 */
+    /**
+     * 槽位引用：{@code x,y,z:槽号}（方块容器）、{@code self:mainhand|offhand|head|chest|legs|feet}
+     * 或 {@code self:pack:0..8}（载体随身背包，{@code PackCarrier}）。
+     */
     private record SlotRef(boolean self, net.minecraft.core.BlockPos pos, int slot,
-                           net.minecraft.world.entity.EquipmentSlot equip) {
+                           net.minecraft.world.entity.EquipmentSlot equip, int pack) {
     }
 
     private static SlotRef parseSlot(String ref) {
         if (ref == null || ref.isBlank()) {
             throw new IllegalArgumentException("槽位引用形如 \"x,y,z:3\" 或 \"self:mainhand\"");
         }
+        if (ref.startsWith("self:pack:")) {
+            int idx = Integer.parseInt(ref.substring("self:pack:".length()).trim());
+            if (idx < 0 || idx > 8) {
+                throw new IllegalArgumentException("随身背包槽位 0..8: " + idx);
+            }
+            return new SlotRef(true, null, idx, null, idx);
+        }
         if (ref.startsWith("self:")) {
             String e = ref.substring("self:".length()).toLowerCase(java.util.Locale.ROOT);
             return switch (e) {
-                case "mainhand" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.MAINHAND);
-                case "offhand" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.OFFHAND);
-                case "head" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.HEAD);
-                case "chest" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.CHEST);
-                case "legs" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.LEGS);
-                case "feet" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.FEET);
+                case "mainhand" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.MAINHAND, -1);
+                case "offhand" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.OFFHAND, -1);
+                case "head" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.HEAD, -1);
+                case "chest" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.CHEST, -1);
+                case "legs" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.LEGS, -1);
+                case "feet" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.FEET, -1);
                 default -> throw new IllegalArgumentException("未知装备槽: " + e);
             };
         }
@@ -858,21 +876,34 @@ public final class EntityToolsModule {
             throw new IllegalArgumentException("容器槽位引用形如 \"x,y,z:3\"");
         }
         return new SlotRef(false, parseBlock(ref.substring(0, i)),
-                Integer.parseInt(ref.substring(i + 1).trim()), null);
+                Integer.parseInt(ref.substring(i + 1).trim()), null, -1);
     }
 
     private net.minecraft.world.item.ItemStack stackAt(LivingEntity self, ServerLevel level, SlotRef ref) {
+        if (ref.pack() >= 0) {
+            return packOf(self).getItem(ref.pack());
+        }
         return ref.self() ? self.getItemBySlot(ref.equip())
                 : containerAt(level, ref.pos()).getItem(ref.slot());
     }
 
     private void setStackAt(LivingEntity self, ServerLevel level, SlotRef ref,
                             net.minecraft.world.item.ItemStack stack) {
-        if (ref.self()) {
+        if (ref.pack() >= 0) {
+            packOf(self).setItem(ref.pack(), stack);
+        } else if (ref.self()) {
             self.setItemSlot(ref.equip(), stack);
         } else {
             containerAt(level, ref.pos()).setItem(ref.slot(), stack);
         }
+    }
+
+    /** 随身背包（载体必须实现 {@link io.github.piwugu.snowleopard.tools.PackCarrier}）。 */
+    private static net.minecraft.world.Container packOf(LivingEntity self) {
+        if (self instanceof io.github.piwugu.snowleopard.tools.PackCarrier pc) {
+            return pc.pack();
+        }
+        throw new IllegalArgumentException("绑定的实体没有随身背包（只有 snowleopard:avatar 有九格）");
     }
 
     private net.minecraft.world.Container containerAt(ServerLevel level, net.minecraft.core.BlockPos pos) {
@@ -919,6 +950,11 @@ public final class EntityToolsModule {
                 net.minecraft.world.entity.EquipmentSlot.HEAD, net.minecraft.world.entity.EquipmentSlot.CHEST,
                 net.minecraft.world.entity.EquipmentSlot.LEGS, net.minecraft.world.entity.EquipmentSlot.FEET}) {
             stacks.add(new java.util.AbstractMap.SimpleEntry<>("self:" + slot.getName(), self.getItemBySlot(slot)));
+        }
+        if (self instanceof io.github.piwugu.snowleopard.tools.PackCarrier pc) {
+            for (int i = 0; i < pc.pack().getContainerSize(); i++) {
+                stacks.add(new java.util.AbstractMap.SimpleEntry<>("self:pack:" + i, pc.pack().getItem(i)));
+            }
         }
         ItemIndex index = new ItemIndex(entriesOf(stacks));
         List<ItemIndex.Entry> hits = index.search(optQuery(params));
