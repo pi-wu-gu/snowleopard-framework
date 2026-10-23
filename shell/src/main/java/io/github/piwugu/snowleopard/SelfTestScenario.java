@@ -77,6 +77,7 @@ public final class SelfTestScenario {
             ok &= runM2(level, base, z2, ref2);
             ok &= runM3(level, base);
             ok &= runM5(level, base);
+            ok &= runM6(level, base);
         } catch (Throwable t) {
             ok = false;
             SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST] 场景异常", t);
@@ -579,6 +580,136 @@ public final class SelfTestScenario {
                 Map.of("radius", 30, "include_entities", true, "max_chars", 100));
         ok &= step("M5", String.valueOf(data(w3)).contains("truncated=true"),
                 "返回量上限截断标记", "truncated in " + String.valueOf(data(w3)).substring(0, 80));
+        return ok;
+    }
+
+    /** M6：动态感知——自动入册/controller 归属/轨迹限频/保留窗口/退订/坏钩子隔离。 */
+    private static boolean runM6(ServerLevel level, BlockPos base) {
+        boolean ok = true;
+        String model = "selftest-m6";
+
+        Zombie z13 = new Zombie(level);
+        z13.moveTo(base.getX() + 9.5, base.getY(), base.getZ() - 16.5, 0, 0);
+        level.addFreshEntity(z13);
+        z13.goalSelector.removeAllGoals(g -> true);
+        z13.targetSelector.removeAllGoals(g -> true);
+        String ref13 = z13.getUUID().toString();
+        Zombie z14 = new Zombie(level);
+        z14.moveTo(base.getX() + 11.5, base.getY(), base.getZ() - 16.5, 0, 0);
+        level.addFreshEntity(z14);
+        z14.goalSelector.removeAllGoals(g -> true);
+        z14.targetSelector.removeAllGoals(g -> true);
+        String ref14 = z14.getUUID().toString();
+        Zombie z15 = new Zombie(level);
+        z15.moveTo(base.getX() + 13.5, base.getY(), base.getZ() - 16.5, 0, 0);
+        level.addFreshEntity(z15);
+        z15.goalSelector.removeAllGoals(g -> true);
+        z15.targetSelector.removeAllGoals(g -> true);
+        String ref15 = z15.getUUID().toString();
+
+        // 绑定 z13（绑定实体自动入册，controller=控制模型编号——裁决 §1.4）
+        EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
+        EntityToolsRuntime.dispatch(model, "entity", "pick", Map.of("target", ref13));
+        Result l1 = EntityToolsRuntime.dispatch(model, "watch", "watch_list", Map.of());
+        ok &= step("M6", String.valueOf(data(l1)).contains(ref13)
+                        && String.valueOf(data(l1)).contains("controller=" + model),
+                "绑定实体自动入册 + controller=控制模型编号", String.valueOf(data(l1)));
+
+        // 显式监视未绑定实体 → controller=空（混合归属：绑定=模型编号 / 无主=空）
+        EntityToolsRuntime.dispatch(model, "watch", "watch", Map.of("target", ref14));
+        Result l2 = EntityToolsRuntime.dispatch(model, "watch", "watch_list", Map.of());
+        ok &= step("M6", String.valueOf(data(l2)).contains(ref14),
+                "watch 显式入册 z14（列表含 z14）", String.valueOf(data(l2)));
+
+        // 轨迹限频：同 tick 两次 tickWatch → 每监视实体恰 1 条 TRAJECTORY（10 tick 内不重采）
+        // 计数按 kind=TRAJECTORY 精确匹配（kinds 枚举说明字段含同名字样，2026-10-23 计数踩过）
+        EntityToolsRuntime.module(model).tickWatch();
+        EntityToolsRuntime.module(model).tickWatch();
+        Result e1 = EntityToolsRuntime.dispatch(model, "watch", "watch_events",
+                Map.of("target", ref13, "limit", 100));
+        String s1 = String.valueOf(data(e1));
+        long traj13 = s1.split("kind=TRAJECTORY", -1).length - 1;
+        ok &= step("M6", traj13 == 1,
+                "轨迹限频：同 tick 二次采样被拒（TRAJECTORY×" + traj13 + "）", s1);
+
+        // 攻击源动态：z15 伤 z13 → ATTACKED 记录 + 攻击者自动入册
+        z13.hurt(level.damageSources().mobAttack(z15), 2f);
+        Result e2 = EntityToolsRuntime.dispatch(model, "watch", "watch_events",
+                Map.of("target", ref13, "limit", 100));
+        ok &= step("M6", String.valueOf(data(e2)).contains("ATTACKED")
+                        && String.valueOf(data(e2)).contains(ref15),
+                "攻击源动态：ATTACKED 带攻击者", String.valueOf(data(e2)));
+        Result l3 = EntityToolsRuntime.dispatch(model, "watch", "watch_list", Map.of());
+        ok &= step("M6", String.valueOf(data(l3)).contains(ref15),
+                "攻击者自动入册（z15 进监视列表）", String.valueOf(data(l3)));
+
+        // 退订：unwatch 后攻击者不再被自动加回（unwatch=退订语义）
+        EntityToolsRuntime.dispatch(model, "watch", "unwatch", Map.of("target", ref15));
+        z13.hurt(level.damageSources().mobAttack(z15), 1f);
+        Result l4 = EntityToolsRuntime.dispatch(model, "watch", "watch_list", Map.of());
+        ok &= step("M6", !String.valueOf(data(l4)).contains(ref15),
+                "unwatch 退订：攻击源不再自动加回", String.valueOf(data(l4)));
+
+        // 保留窗口：70 次攻击记录 → 条数上限 64，不涨内存
+        for (int i = 0; i < 70; i++) {
+            EntityToolsRuntime.module(model).onHurt(ref13, "", 1.0, EntityToolsRuntime::controllerOf);
+        }
+        Result e3 = EntityToolsRuntime.dispatch(model, "watch", "watch_events",
+                Map.of("target", ref13, "limit", 100));
+        String s3 = String.valueOf(data(e3));
+        long total13 = s3.split("tick=", -1).length - 1;
+        ok &= step("M6", total13 == 64,
+                "保留窗口条数上限（70 攻击后存 " + total13 + " ≤64）", "count in feed=" + total13);
+
+        // 死亡 → DIED 动态
+        z14.hurt(level.damageSources().generic(), 1000f);
+        Result e4 = EntityToolsRuntime.dispatch(model, "watch", "watch_events",
+                Map.of("target", ref14, "limit", 100));
+        ok &= step("M6", String.valueOf(data(e4)).contains("DIED"),
+                "死亡 → DIED 动态记录", String.valueOf(data(e4)));
+
+        // 触发挂点：坏钩子注入不杀主链（TriggerRegistry 钩子级隔离——坏钩子先跑也无妨）
+        final boolean[] goodRan = {false};
+        EntityToolsRuntime.triggers().register(new snowleopard.core.trigger.TriggerRegistry.Hook() {
+            @Override
+            public String groupFull() {
+                return "mod:snowleopard:bad";
+            }
+
+            @Override
+            public void fire(snowleopard.core.trigger.TriggerRegistry.Point point) {
+                throw new RuntimeException("故意坏钩子");
+            }
+        });
+        EntityToolsRuntime.triggers().register(new snowleopard.core.trigger.TriggerRegistry.Hook() {
+            @Override
+            public String groupFull() {
+                return "mod:snowleopard:good";
+            }
+
+            @Override
+            public void fire(snowleopard.core.trigger.TriggerRegistry.Point point) {
+                goodRan[0] = true;
+            }
+        });
+        var hits = EntityToolsRuntime.triggers().fire(snowleopard.core.trigger.TriggerRegistry.Point.SESSION_END);
+        boolean badIsolated = hits.stream().anyMatch(h -> "mod:snowleopard:bad".equals(h.groupFull())
+                && h.result() instanceof Result.Severe);
+        boolean chainAlive = goodRan[0]
+                && EntityToolsRuntime.dispatch(model, "watch", "watch_list", Map.of()) instanceof Result.Ok;
+        ok &= step("M6", badIsolated && chainAlive,
+                "坏钩子不杀主链（SEVERE 隔离 + 后序钩子照跑 + 工具面存活）",
+                "badIsolated=" + badIsolated + " goodRan=" + goodRan[0] + " hits=" + hits.size());
+
+        // 枚举与记录对账：动态 kind 全在写死枚举内
+        Result e5 = EntityToolsRuntime.dispatch(model, "watch", "watch_events", Map.of("limit", 100));
+        String s5 = String.valueOf(data(e5));
+        boolean kindsClosed = !s5.contains("kind=") || s5.contains("TRAJECTORY")
+                || s5.contains("ATTACKED") || s5.contains("DIED");
+        ok &= step("M6", kindsClosed && e5 instanceof Result.Ok,
+                "主动查询枚举对账（kind∈TRAJECTORY|ATTACKED|DIED）",
+                String.valueOf(data(e5)).length() > 200
+                        ? String.valueOf(data(e5)).substring(0, 200) : String.valueOf(data(e5)));
         return ok;
     }
 

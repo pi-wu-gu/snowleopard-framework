@@ -26,7 +26,35 @@ public final class EntityToolsRuntime {
 
     private static final Map<String, EntityToolsModule> MODULES = new ConcurrentHashMap<>();
 
+    /**
+     * 自动记录挂核心 TriggerRegistry（M6）——坏钩子不杀主链：fire() 按钩子隔离异常。
+     * 挂点=全部生命周期点（自动记录是连续态势，不分轮次）。
+     */
+    private static final snowleopard.core.trigger.TriggerRegistry TRIGGERS =
+            new snowleopard.core.trigger.TriggerRegistry();
+
+    static {
+        TRIGGERS.register(new snowleopard.core.trigger.TriggerRegistry.Hook() {
+            @Override
+            public String groupFull() {
+                return "mod:snowleopard:watch";
+            }
+
+            @Override
+            public void fire(snowleopard.core.trigger.TriggerRegistry.Point point) {
+                for (EntityToolsModule m : MODULES.values()) {
+                    m.tickWatch();   // 自动记录：玩家入册 + 轨迹限频采样 + 保留窗口淘汰
+                }
+            }
+        });
+    }
+
     private EntityToolsRuntime() {
+    }
+
+    /** 触发器挂点（自测可注入坏钩子验证隔离；宿主按会话生命周期 fire）。 */
+    public static snowleopard.core.trigger.TriggerRegistry triggers() {
+        return TRIGGERS;
     }
 
     /** 取（或建）某模型的模块。世界上下文：有玩家取其所在世界与位置；无玩家退回出生点（专用服务器自测可用）。 */
@@ -84,17 +112,10 @@ public final class EntityToolsRuntime {
                 }
             }
             return false;
-        }, ref -> {
-            for (Map.Entry<String, EntityToolsModule> e : MODULES.entrySet()) {
-                if (ref.equals(e.getValue().bindings().entityOf(e.getKey()))) {
-                    return e.getKey();
-                }
-            }
-            return "";
-        });
+        }, EntityToolsRuntime::controllerOf);
     }
 
-    /** 实体死亡事件 → 各模块死亡流（绑定实体死亡=感官自动关）。 */
+    /** 实体死亡事件 → 各模块死亡流（绑定实体死亡=感官自动关）+ DIED 动态。 */
     @SubscribeEvent
     public static void onLivingDeath(LivingDeathEvent event) {
         LivingEntity e = event.getEntity();
@@ -107,13 +128,44 @@ public final class EntityToolsRuntime {
         }
     }
 
-    /** 服务端每 tick：视角锁定（M2）+ 挖掘推进（M3）+ 移动推进（M4）。 */
+    /** 受伤事件 → 攻击源动态（ATTACKED）+ 攻击者自动入册（裁决：自动记录攻击源）。
+     *  事件名注意：NeoForge 21.1 无 LivingHurtEvent，是 LivingIncomingDamageEvent（2026-10-23 编译踩过）。 */
+    @SubscribeEvent
+    public static void onLivingHurt(net.neoforged.neoforge.event.entity.living.LivingIncomingDamageEvent event) {
+        LivingEntity target = event.getEntity();
+        if (target == null) {
+            return;
+        }
+        String targetRef = target.getUUID().toString();
+        net.minecraft.world.damagesource.DamageSource src = event.getSource();
+        net.minecraft.world.entity.Entity attacker = src == null ? null : src.getEntity();
+        String attackerRef = attacker == null ? "" : attacker.getUUID().toString();
+        for (EntityToolsModule m : MODULES.values()) {
+            m.onHurt(targetRef, attackerRef, event.getAmount(), EntityToolsRuntime::controllerOf);
+        }
+    }
+
+    /** 归属反查：实体 → 控制模型编号（无主/真人=空；红线 6：来自绑定表，不可伪造）。 */
+    public static String controllerOf(String entityRef) {
+        if (entityRef == null) {
+            return "";
+        }
+        for (Map.Entry<String, EntityToolsModule> e : MODULES.entrySet()) {
+            if (entityRef.equals(e.getValue().bindings().entityOf(e.getKey()))) {
+                return e.getKey();
+            }
+        }
+        return "";
+    }
+
+    /** 服务端每 tick：视角锁定（M2）+ 挖掘推进（M3）+ 移动推进（M4）+ 动态自动记录（M6）。 */
     @SubscribeEvent
     public static void onServerTick(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
         for (EntityToolsModule m : MODULES.values()) {
             m.tickViewLock();
             m.tickInteract();
             m.tickMove();
+            m.tickWatch();
         }
     }
 

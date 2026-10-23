@@ -17,6 +17,7 @@ import io.github.piwugu.snowleopard.tools.LookLockMachine;
 import io.github.piwugu.snowleopard.tools.SenseMachine;
 import io.github.piwugu.snowleopard.tools.SenseState;
 import io.github.piwugu.snowleopard.tools.ToolSchemas;
+import io.github.piwugu.snowleopard.tools.WatchFeed;
 import snowleopard.core.result.Result;
 
 /**
@@ -45,6 +46,8 @@ public final class EntityToolsModule {
             new io.github.piwugu.snowleopard.tools.MiningTask();
     private final io.github.piwugu.snowleopard.tools.MoveMachine moveM =
             new io.github.piwugu.snowleopard.tools.MoveMachine();
+    private final io.github.piwugu.snowleopard.tools.WatchFeed watchFeed =
+            new io.github.piwugu.snowleopard.tools.WatchFeed();
     private double lastMoveX, lastMoveY, lastMoveZ;
     private boolean movePrimed;
     private float lastSetYaw;
@@ -137,7 +140,14 @@ public final class EntityToolsModule {
                     case ToolSchemas.WORLD_QUERY -> worldQuery(params, controllerOf);
                     default -> Result.error("world 组无此工具: " + tool);
                 };
-                default -> Result.error("工具组未实现或未知: " + group + "（M2–M6 逐步开放）");
+                case io.github.piwugu.snowleopard.tools.GroupNames.WATCH -> switch (tool) {
+                    case ToolSchemas.WATCH_WATCH -> watchStart(params, controllerOf);
+                    case ToolSchemas.WATCH_UNWATCH -> watchStop(params);
+                    case ToolSchemas.WATCH_LIST -> watchList();
+                    case ToolSchemas.WATCH_EVENTS -> watchEvents(params);
+                    default -> Result.error("watch 组无此工具: " + tool);
+                };
+                default -> Result.error("工具组未实现或未知: " + group);
             };
         } catch (RuntimeException e) {
             return Result.error("工具执行异常: " + e);
@@ -211,6 +221,8 @@ public final class EntityToolsModule {
         if (b instanceof Result.Error) {
             return b;   // 绑定冲突（1:1 被他人占用）
         }
+        // 动态记录范围含绑定实体（裁决 §1.4）——绑定即自动入册，controller=控制模型编号
+        watchFeed.watch(target, modelId);
         // 未选取的候选进入休眠（身份消歧）；选中者保持活动
         ServerLevel level = ctx.level();
         if (level != null) {
@@ -1099,12 +1111,147 @@ public final class EntityToolsModule {
         return Result.ok(out);
     }
 
+    // ── watch（动态感知，M6）──
+
+    /**
+     * 开始记录（实体目标操作——§1.3 非 BOUND 态显式拒绝）。controller 归属：绑定实体=控制
+     * 模型编号，真人/无主=空（裁决 §1.4）——由壳侧 {@code controllerOf} 注入（红线 6 不可伪造）。
+     * 查询面（watch_list/watch_events）是感知面，不受此门（§1.4 使用与感知分层）。
+     */
+    Result watchStart(Map<String, Object> params,
+                      java.util.function.Function<String, String> controllerOf) {
+        if (sense.state() != SenseState.BOUND) {
+            return Result.error("感官未开启或未绑定——watch 实体目标操作在关闭态禁用（显式拒绝，不静默）");
+        }
+        String target = optQueryTarget(params);
+        if (target == null) {
+            return Result.error("watch 需要 target（实体编号）");
+        }
+        String controller = controllerOf == null ? "" : controllerOf.apply(target);
+        watchUnsubscribed.remove(target);   // 显式重开监视=恢复自动入册资格
+        Result r = watchFeed.watch(target, controller);
+        if (r instanceof Result.Ok) {
+            return Result.ok(Map.of("watching", watchFeed.list()));
+        }
+        return r;
+    }
+
+    Result watchStop(Map<String, Object> params) {
+        if (sense.state() != SenseState.BOUND) {
+            return Result.error("感官未开启或未绑定——unwatch 实体目标操作在关闭态禁用（显式拒绝，不静默）");
+        }
+        String target = optQueryTarget(params);
+        if (target == null) {
+            return Result.error("unwatch 需要 target（实体编号）");
+        }
+        watchUnsubscribed.add(target);   // 退订：不再被自动入册加回
+        return watchFeed.unwatch(target);
+    }
+
+    Result watchList() {
+        return Result.ok(Map.of("watching", watchFeed.list()));
+    }
+
+    /** 查询动态：target 缺省=全部（混合归属逐一可见）；limit/since_tick 截断。 */
+    Result watchEvents(Map<String, Object> params) {
+        String target = optQueryTarget(params);
+        int limit = optInt(params, "limit", WatchFeed.DEFAULT_QUERY_LIMIT);
+        long since = optLong(params, "since_tick", 0);
+        List<Map<String, Object>> evs = new ArrayList<>();
+        for (WatchFeed.Event e : watchFeed.events(target, limit, since)) {
+            evs.add(e.toMap());
+        }
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("events", evs);
+        out.put("count", evs.size());
+        out.put("kinds", "TRAJECTORY|ATTACKED|DIED（枚举写死）");
+        return Result.ok(out);
+    }
+
+    /**
+     * 每 tick 自动记录（壳侧 tick 钩子）：轨迹采样（限频）+ 自动入册未记录的玩家
+     * （"自动记录玩家及攻击源动态"——玩家 controller=空）。
+     */
+    public void tickWatch() {
+        ServerLevel level = ctx.level();
+        if (level == null) {
+            return;
+        }
+        long tick = level.getGameTime();
+        // 自动记录：玩家入册（已在监视/已退订的不重复动）
+        for (Player p : level.players()) {
+            String ref = p.getUUID().toString();
+            if (!watchFeed.isWatching(ref) && !watchUnsubscribed.contains(ref)) {
+                watchFeed.watch(ref, "");
+            }
+        }
+        // 轨迹采样（限频：10 tick 一次）
+        for (Map<String, Object> w : watchFeed.list()) {
+            String ref = String.valueOf(w.get("entityRef"));
+            if (!watchFeed.shouldSample(ref, tick)) {
+                continue;
+            }
+            try {
+                Entity e = level.getEntity(java.util.UUID.fromString(ref));
+                if (e == null) {
+                    continue;
+                }
+                watchFeed.record(WatchFeed.Kind.TRAJECTORY, ref,
+                        Map.of("x", e.getX(), "y", e.getY(), "z", e.getZ()), tick);
+            } catch (IllegalArgumentException ignored) {
+                // 非 UUID 的候选编号不进轨迹采样
+            }
+        }
+    }
+
+    /** 攻击源动态（壳侧受伤事件钩子）：目标/攻击者在监视中才记；攻击者自动入册。 */
+    public void onHurt(String targetRef, String attackerRef, double damage,
+                       java.util.function.Function<String, String> controllerOf) {
+        ServerLevel level = ctx.level();
+        long tick = level == null ? 0 : level.getGameTime();
+        if (attackerRef != null && !attackerRef.isBlank()
+                && !watchFeed.isWatching(attackerRef) && !watchUnsubscribed.contains(attackerRef)) {
+            // 攻击源自动入册；controller=归属查询（绑定实体=模型编号，真人=空）
+            watchFeed.watch(attackerRef, controllerOf == null ? "" : controllerOf.apply(attackerRef));
+        }
+        if (targetRef != null && watchFeed.isWatching(targetRef)) {
+            Map<String, Object> data = new java.util.LinkedHashMap<>();
+            data.put("attacker", attackerRef == null ? "" : attackerRef);
+            data.put("damage", damage);
+            watchFeed.record(WatchFeed.Kind.ATTACKED, targetRef, data, tick);
+        }
+    }
+
+    /** 解除自动入册（unwatch 即退订——不再被玩家扫描/攻击源自动加回）。 */
+    private final java.util.Set<String> watchUnsubscribed = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+
+    private static String optQueryTarget(Map<String, Object> params) {
+        Object t = params.get("target");
+        String s = String.valueOf(t);
+        return (t == null || s.isBlank() || "null".equals(s)) ? null : s;
+    }
+
+    private static int optInt(Map<String, Object> params, String key, int dflt) {
+        Object v = params.get(key);
+        return v instanceof Number n ? n.intValue() : dflt;
+    }
+
+    private static long optLong(Map<String, Object> params, String key, long dflt) {
+        Object v = params.get(key);
+        return v instanceof Number n ? n.longValue() : dflt;
+    }
+
     // ── 死亡流（壳侧事件钩子调用）──
 
     /** 实体死亡：绑定实体死亡→感官自动关+解绑（裁决）；其他→候选消亡，状态不动。 */
     public Result onEntityDeath(String entityRef) {
         Result r = sense.death(entityRef);
         bindings.dropEntity(entityRef);
+        if (entityRef != null && watchFeed.isWatching(entityRef)) {
+            ServerLevel level = ctx.level();
+            watchFeed.record(WatchFeed.Kind.DIED, entityRef, Map.of(),
+                    level == null ? 0 : level.getGameTime());
+        }
         if (r instanceof Result.Ok) {
             lastCandidates = List.of();
             return Result.ok(Map.of("state", SenseState.OFF.name(),

@@ -52,6 +52,12 @@ public final class ToolSchemas {
     // ── world（世界，M5）──
     public static final String WORLD_QUERY = "query";
 
+    // ── watch（动态感知，M6）──
+    public static final String WATCH_WATCH = "watch";
+    public static final String WATCH_UNWATCH = "unwatch";
+    public static final String WATCH_LIST = "watch_list";
+    public static final String WATCH_EVENTS = "watch_events";
+
     // ── entity_self（自我观测）──
     public static final String SELF_STATUS = "status";
 
@@ -184,6 +190,28 @@ public final class ToolSchemas {
                             "include_entities", "含实体（带 controller 归属标注）",
                             "max_chars", "返回上限（缺省 4000，截断带标记）",
                             "护栏", "仅已加载区块（声明在 note）")));
+
+    public static final java.util.List<ToolRegistry.Tool> WATCH_TOOLS = java.util.List.of(
+            new ToolRegistry.Tool(WATCH_WATCH, "锁定实体开始记录（命名与视角\"锁定\"分义——watch=监视）",
+                    "watch.watch(target) → {watching:[{entityRef, controller, events}]}",
+                    Map.of("type", "object", "required", java.util.List.of("target"),
+                            "target", "实体编号（候选编号/UUID）",
+                            "note", "记录范围含真人玩家与绑定实体；绑定实体自动入监视（裁决 §1.4）")),
+            new ToolRegistry.Tool(WATCH_UNWATCH, "解锁：停止记录（历史保留在保留窗口内）",
+                    "watch.unwatch(target) → {watching}",
+                    Map.of("type", "object", "required", java.util.List.of("target"),
+                            "target", "实体编号")),
+            new ToolRegistry.Tool(WATCH_LIST, "查询监视列表（每项带归属 controller）",
+                    "watch.watch_list() → {watching:[{entityRef, controller, events, lastTick}]}",
+                    Map.of("type", "object", "note", "无参数")),
+            new ToolRegistry.Tool(WATCH_EVENTS, "查询动态（事件集+轨迹枚举写死；每条带 controller）",
+                    "watch.watch_events(target?, limit?, since_tick?) → {events:[{tick, kind, entityRef, controller, data}]}",
+                    Map.of("type", "object",
+                            "target", "可选实体编号（缺省=全部，混合归属逐一可见）",
+                            "limit", "条数上限（缺省 20，留最近）",
+                            "since_tick", "只取该 tick 之后（含）",
+                            "kind 枚举", "TRAJECTORY|ATTACKED|DIED（写死）",
+                            "窗口", "条数 64/实体 + 时间 1200 tick 双淘汰；轨迹限频 10 tick")));
 
     private ToolSchemas() {
     }
