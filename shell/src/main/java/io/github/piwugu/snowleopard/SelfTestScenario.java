@@ -30,9 +30,11 @@ public final class SelfTestScenario {
     public static void onServerStarted(ServerStartedEvent event) {
         MinecraftServer server = event.getServer();
         boolean ok = true;
+        ServerLevel level = null;
+        BlockPos base = null;
         try {
-            ServerLevel level = server.overworld();
-            BlockPos base = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING,
+            level = server.overworld();
+            base = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING,
                     level.getSharedSpawnPos().offset(8, 0, 8));
 
             Zombie z1 = new Zombie(level);
@@ -78,8 +80,14 @@ public final class SelfTestScenario {
             ok = false;
             SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST] 场景异常", t);
         }
-        SnowLeopardMod.LOG.info("[雪豹框架][SELFTEST] ===== {} =====", ok ? "PASS" : "FAIL");
-        server.halt(false);
+        // M1–M3 同步段完成；M4 需要真实物理 tick——交给 tick 驱动器（结束时统一 halt）
+        M4.start(server, level, base, ok);
+    }
+
+    /** M4 每 tick 驱动（与实体物理同拍）。 */
+    @SubscribeEvent
+    public static void onServerTick(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
+        M4.tick();
     }
 
     /** M2：look 一致性 + 六条结束路径。z2 为绑定实体（M1 死亡流后重新开感官选取）。 */
@@ -279,6 +287,207 @@ public final class SelfTestScenario {
         ok &= step("M3", use instanceof Result.Ok && noteAfter != noteBefore,
                 "use 方块交互生效（音高 " + noteBefore + "→" + noteAfter + "）", String.valueOf(data(use)));
         return ok;
+    }
+
+    /**
+     * M4 tick 驱动器（2026-10-23 14:15 (UTC+8)）：三驱动/goto/阻塞/不可达需要真实物理位移——
+     * 每 tick 推进一个阶段（装配→等待真 tick→断言），跑完统一报告并关机。
+     */
+    private static final class M4 {
+
+        private static net.minecraft.server.MinecraftServer server;
+        private static ServerLevel level;
+        private static BlockPos base;
+        private static boolean ok;
+        private static int phase;
+        private static int wait;
+        private static Zombie z9;
+        private static double sx, sy, sz;
+        private static double maxY;
+
+        static void start(net.minecraft.server.MinecraftServer s, ServerLevel lv, BlockPos b, boolean okSoFar) {
+            server = s;
+            level = lv;
+            base = b;
+            ok = okSoFar;
+            phase = 0;
+            wait = 0;
+            level.setDayTime(18000);   // 夜间——防僵尸白日燃烧干扰测量
+        }
+
+        static void tick() {
+            if (server == null || phase > 8) {
+                return;
+            }
+            try {
+                String model = "selftest-m4";
+                switch (phase) {
+                    case 0 -> {   // 造化身（剥 AI 目标=压掉游荡/攻击但保留物理——
+                        // setNoAi 会连物理一起冻住（僵尸飘空、脚下无支撑），2026-10-23 踩过）
+                        z9 = new Zombie(level);
+                        z9.moveTo(base.getX() + 0.5, base.getY(), base.getZ() - 8.5, 180, 0);
+                        level.addFreshEntity(z9);
+                        z9.goalSelector.removeAllGoals(g -> true);
+                        z9.targetSelector.removeAllGoals(g -> true);
+                        EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
+                        Result p = EntityToolsRuntime.dispatch(model, "entity", "pick",
+                                Map.of("target", z9.getUUID().toString()));
+                        ok &= step("M4", p instanceof Result.Ok, "绑定化身 z9（剥 AI 保物理）", String.valueOf(data(p)));
+                        sx = z9.getX();
+                        sy = z9.getY();
+                        sz = z9.getZ();
+                        next();
+                    }
+                    case 1 -> {   // 距离驱动（净位移判向，不绑轴——方向随朝向而变）
+                        if (wait == 0) {
+                            sx = z9.getX();
+                            sz = z9.getZ();
+                            EntityToolsRuntime.dispatch(model, "move", "move",
+                                    Map.of("direction", "forward", "distance", 1.5));
+                        }
+                        wait++;
+                        Result st = EntityToolsRuntime.dispatch(model, "move", "status", Map.of());
+                        if (String.valueOf(data(st)).contains("DONE") || wait > 40) {
+                            double moved = Math.sqrt(Math.pow(z9.getX() - sx, 2) + Math.pow(z9.getZ() - sz, 2));
+                            ok &= step("M4", String.valueOf(data(st)).contains("DONE") && moved >= 1.0,
+                                    "距离驱动 DONE（净位移 " + String.format("%.2f", moved) + "）", String.valueOf(data(st)));
+                            sx = z9.getX();
+                            sz = z9.getZ();
+                            next();
+                        }
+                    }
+                    case 2 -> {   // 时长驱动（净位移判向）
+                        if (wait == 0) {
+                            sx = z9.getX();
+                            sz = z9.getZ();
+                            EntityToolsRuntime.dispatch(model, "move", "move",
+                                    Map.of("direction", "left", "duration_ticks", 10));
+                        }
+                        wait++;
+                        Result st = EntityToolsRuntime.dispatch(model, "move", "status", Map.of());
+                        if (String.valueOf(data(st)).contains("DONE") || wait > 30) {
+                            double moved = Math.sqrt(Math.pow(z9.getX() - sx, 2) + Math.pow(z9.getZ() - sz, 2));
+                            ok &= step("M4", String.valueOf(data(st)).contains("DONE") && moved >= 0.8,
+                                    "时长驱动 DONE（净位移 " + String.format("%.2f", moved) + "）", String.valueOf(data(st)));
+                            next();
+                        }
+                    }
+                    case 3 -> {   // 蹲是独立姿态
+                        EntityToolsRuntime.dispatch(model, "move", "sneak", Map.of("on", true));
+                        boolean c1 = z9.isShiftKeyDown();
+                        EntityToolsRuntime.dispatch(model, "move", "sneak", Map.of("on", false));
+                        boolean c2 = !z9.isShiftKeyDown();
+                        ok &= step("M4", c1 && c2, "蹲伏姿态独立开关", "on=" + c1 + " off=" + c2);
+                        next();
+                    }
+                    case 4 -> {   // 跳跃（峰值对起跳前高度）
+                        if (wait == 0) {
+                            sy = z9.getY();
+                            maxY = sy;
+                            Result j = EntityToolsRuntime.dispatch(model, "move", "jump", Map.of());
+                            ok &= step("M4", j instanceof Result.Ok, "跳跃起跳（脚下支撑）", String.valueOf(data(j)));
+                        }
+                        wait++;
+                        maxY = Math.max(maxY, z9.getY());
+                        if (wait >= 10) {
+                            ok &= step("M4", maxY > sy + 0.5,
+                                    "跳跃离地（峰值 " + String.format("%.2f", maxY)
+                                            + " 起跳 " + String.format("%.2f", sy) + "）", "");
+                            sy = z9.getY();
+                            next();
+                        }
+                    }
+                    case 5 -> {   // goto：DONE=连续 2 tick 贴住
+                        if (wait == 0) {
+                            EntityToolsRuntime.dispatch(model, "move", "goto",
+                                    Map.of("target", (base.getX() + 3) + "," + base.getY() + "," + base.getZ(),
+                                            "max_ticks", 60));
+                        }
+                        wait++;
+                        Result st = EntityToolsRuntime.dispatch(model, "move", "status", Map.of());
+                        if (String.valueOf(data(st)).contains("DONE") || wait > 60) {
+                            double d = Math.sqrt(Math.pow(z9.getX() - (base.getX() + 3.5), 2)
+                                    + Math.pow(z9.getZ() - base.getZ(), 2));
+                            ok &= step("M4", String.valueOf(data(st)).contains("DONE") && d < 1.5,
+                                    "goto DONE（距目标 " + String.format("%.2f", d) + "）", String.valueOf(data(st)));
+                            next();
+                        }
+                    }
+                    case 6 -> {   // stop 即停
+                        if (wait == 0) {
+                            EntityToolsRuntime.dispatch(model, "move", "goto",
+                                    Map.of("target", (base.getX() + 15) + "," + base.getY() + "," + base.getZ()));
+                        }
+                        wait++;
+                        if (wait == 3) {
+                            EntityToolsRuntime.dispatch(model, "move", "stop", Map.of());
+                        }
+                        if (wait >= 5) {
+                            Result st = EntityToolsRuntime.dispatch(model, "move", "status", Map.of());
+                            ok &= step("M4", !String.valueOf(data(st)).contains("PROGRESS"),
+                                    "stop 即停（中断移动）", String.valueOf(data(st)));
+                            next();
+                        }
+                    }
+                    case 7 -> {   // 阻塞：封进石笼 → 12 tick 无水平位移 → BLOCKED
+                        if (wait == 0) {
+                            BlockPos c = z9.blockPosition();
+                            for (var d : new net.minecraft.core.Direction[]{
+                                    net.minecraft.core.Direction.NORTH, net.minecraft.core.Direction.SOUTH,
+                                    net.minecraft.core.Direction.EAST, net.minecraft.core.Direction.WEST}) {
+                                level.setBlockAndUpdate(c.relative(d),
+                                        net.minecraft.world.level.block.Blocks.OBSIDIAN.defaultBlockState());
+                            }
+                            EntityToolsRuntime.dispatch(model, "move", "goto",
+                                    Map.of("target", (base.getX() + 15) + "," + base.getY() + "," + base.getZ(),
+                                            "max_ticks", 60));
+                        }
+                        wait++;
+                        if (wait >= 25) {
+                            Result st = EntityToolsRuntime.dispatch(model, "move", "status", Map.of());
+                            ok &= step("M4", String.valueOf(data(st)).contains("BLOCKED"),
+                                    "卡墙上报阻塞（非假成功）", String.valueOf(data(st)));
+                            BlockPos c = z9.blockPosition();
+                            for (var d : new net.minecraft.core.Direction[]{
+                                    net.minecraft.core.Direction.NORTH, net.minecraft.core.Direction.SOUTH,
+                                    net.minecraft.core.Direction.EAST, net.minecraft.core.Direction.WEST}) {
+                                level.setBlockAndUpdate(c.relative(d), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                            }
+                            next();
+                        }
+                    }
+                    default -> {   // 8：三种不可达显式报因（预检，同步即可）→ 收口
+                        Result r1 = EntityToolsRuntime.dispatch(model, "move", "goto",
+                                Map.of("target", base.getX() + "," + (base.getY() + 6) + "," + base.getZ()));
+                        ok &= step("M4", r1 instanceof Result.Error && String.valueOf(r1).contains("高差"),
+                                "不可达：高差超阈值报因", String.valueOf(r1));
+                        BlockPos water = base.offset(6, 0, -6);
+                        level.setBlockAndUpdate(water, net.minecraft.world.level.block.Blocks.WATER.defaultBlockState());
+                        Result r2 = EntityToolsRuntime.dispatch(model, "move", "goto",
+                                Map.of("target", water.getX() + "," + water.getY() + "," + water.getZ()));
+                        ok &= step("M4", r2 instanceof Result.Error && String.valueOf(r2).contains("流体"),
+                                "不可达：目标在流体中报因", String.valueOf(r2));
+                        Result r3 = EntityToolsRuntime.dispatch(model, "move", "goto",
+                                Map.of("target", (base.getX() + 500) + "," + base.getY() + "," + base.getZ()));
+                        ok &= step("M4", r3 instanceof Result.Error && String.valueOf(r3).contains("未加载"),
+                                "不可达：目标区块未加载报因", String.valueOf(r3));
+                        next();
+                        SnowLeopardMod.LOG.info("[雪豹框架][SELFTEST] ===== {} =====", ok ? "PASS" : "FAIL");
+                        server.halt(false);
+                    }
+                }
+            } catch (Throwable t) {
+                ok = false;
+                SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST-M4] 场景异常", t);
+                SnowLeopardMod.LOG.info("[雪豹框架][SELFTEST] ===== FAIL =====");
+                server.halt(false);
+            }
+        }
+
+        private static void next() {
+            phase++;
+            wait = 0;
+        }
     }
 
     private static Object data(Result r) {

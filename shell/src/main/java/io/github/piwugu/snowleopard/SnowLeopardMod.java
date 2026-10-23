@@ -76,8 +76,11 @@ public final class SnowLeopardMod {
 
             // 死亡流：绑定实体死亡 → 感官自动关闭（裁决 05:10）
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(EntityToolsRuntime::onLivingDeath);
-            // M1 真机场景自测：专用服务器起来后跑全链并自动关机（开发流程 M1 验收）
+            // 每 tick：视角锁定/挖掘/移动推进（M2–M4 的执行面）
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(EntityToolsRuntime::onServerTick);
+            // M1 真机场景自测：M1–M3 同步段 + M4 tick 驱动段（开发流程验收）
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SelfTestScenario::onServerStarted);
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SelfTestScenario::onServerTick);
 
             SelfTest.run(core);
         } catch (Throwable t) {

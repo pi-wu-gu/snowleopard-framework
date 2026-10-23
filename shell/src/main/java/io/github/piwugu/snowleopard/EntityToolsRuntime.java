@@ -100,12 +100,13 @@ public final class EntityToolsRuntime {
         }
     }
 
-    /** 服务端每 tick：视角锁定执行与六条结束路径评估（M2）+ 挖掘推进（M3）。 */
+    /** 服务端每 tick：视角锁定（M2）+ 挖掘推进（M3）+ 移动推进（M4）。 */
     @SubscribeEvent
     public static void onServerTick(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
         for (EntityToolsModule m : MODULES.values()) {
             m.tickViewLock();
             m.tickInteract();
+            m.tickMove();
         }
     }
 

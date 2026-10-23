@@ -42,6 +42,10 @@ public final class EntityToolsModule {
     private final LookLockMachine lookLock = new LookLockMachine();
     private final io.github.piwugu.snowleopard.tools.MiningTask mining =
             new io.github.piwugu.snowleopard.tools.MiningTask();
+    private final io.github.piwugu.snowleopard.tools.MoveMachine moveM =
+            new io.github.piwugu.snowleopard.tools.MoveMachine();
+    private double lastMoveX, lastMoveY, lastMoveZ;
+    private boolean movePrimed;
     private float lastSetYaw;
     private float lastSetPitch;
     private String lockFace = "";
@@ -109,6 +113,15 @@ public final class EntityToolsModule {
                     case ToolSchemas.INTERACT_BREAK -> breakBlock(params);
                     case ToolSchemas.INTERACT_STATUS -> interactStatus();
                     default -> Result.error("interact 组无此工具: " + tool);
+                };
+                case io.github.piwugu.snowleopard.tools.GroupNames.MOVE -> switch (tool) {
+                    case ToolSchemas.MOVE_MOVE -> move(params);
+                    case ToolSchemas.MOVE_SNEAK -> sneak(params);
+                    case ToolSchemas.MOVE_JUMP -> jump();
+                    case ToolSchemas.MOVE_GOTO -> gotoPos(params);
+                    case ToolSchemas.MOVE_STOP -> stopMove();
+                    case ToolSchemas.MOVE_STATUS -> moveStatus();
+                    default -> Result.error("move 组无此工具: " + tool);
                 };
                 default -> Result.error("工具组未实现或未知: " + group + "（M2–M6 逐步开放）");
             };
@@ -575,6 +588,178 @@ public final class EntityToolsModule {
         self.setXRot((float) a.pitch());
         lastSetYaw = (float) a.yaw();
         lastSetPitch = (float) a.pitch();
+    }
+
+    // ── move（M4）──
+
+    /** 时长/距离驱动移动。方向在开始时冻结为绝对向量（随转身不变）。 */
+    Result move(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        Object dur = params.get("duration_ticks");
+        Object dist = params.get("distance");
+        Result r = moveM.startMove(String.valueOf(params.get("direction")),
+                dur instanceof Number n ? n.doubleValue() : null,
+                dist instanceof Number d ? d.doubleValue() : null,
+                self.getYRot());
+        if (r instanceof Result.Error) {
+            return r;
+        }
+        primeMove(self);
+        return r;
+    }
+
+    Result sneak(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        boolean on = Boolean.parseBoolean(String.valueOf(params.get("on")));
+        self.setShiftKeyDown(on);
+        return Result.ok(Map.of("sneaking", self.isShiftKeyDown()));
+    }
+
+    /** 跳跃：vy≤0.08 ∧ 脚下支撑才起跳（Friday 口径）。 */
+    Result jump() {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        if (!self.onGround()) {
+            return Result.error("脚下无支撑——跳不起来");
+        }
+        if (self.getDeltaMovement().y > 0.08) {
+            return Result.error("仍在上升中（vy>0.08）——等落稳再跳");
+        }
+        var v = self.getDeltaMovement();
+        self.setDeltaMovement(v.x, 0.42, v.z);
+        return Result.ok(Map.of("ok", true, "y", self.getY()));
+    }
+
+    /** goto：不可达预检（高差/流体/未加载）→ 显式报因；然后物理滑动趋近（禁 setpos）。 */
+    Result gotoPos(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        net.minecraft.core.BlockPos target;
+        try {
+            target = parseBlock(String.valueOf(params.get("target")));
+        } catch (RuntimeException e) {
+            return Result.error("goto 需要 target（x,y,z）: " + e.getMessage());
+        }
+        ServerLevel level = ctx.level();
+        if (level == null) {
+            return Result.error("世界未就绪");
+        }
+        if (!level.isLoaded(target)) {
+            return Result.error("不可达：目标区块未加载");
+        }
+        if (Math.abs(target.getY() - self.getY()) > 3.0) {
+            return Result.error("不可达：高差超阈值（>3，跳跃/攀爬未实现）");
+        }
+        if (!level.getBlockState(target).getFluidState().isEmpty()) {
+            return Result.error("不可达：目标在流体中（游泳未实现）");
+        }
+        int max = params.get("max_ticks") instanceof Number n ? n.intValue() : 400;
+        Result r = moveM.startGoto(target.getX() + 0.5, target.getY(), target.getZ() + 0.5, max);
+        if (r instanceof Result.Error) {
+            return r;
+        }
+        primeMove(self);
+        return r;
+    }
+
+    Result stopMove() {
+        LivingEntity self = requireBound();
+        if (self != null) {
+            var v = self.getDeltaMovement();
+            self.setDeltaMovement(0, v.y, 0);
+        }
+        return moveM.stop();
+    }
+
+    Result moveStatus() {
+        Map<String, Object> d = new java.util.LinkedHashMap<>();
+        LivingEntity self = sense.boundEntity() == null ? null : boundLiving(ctx.level());
+        if (self != null) {
+            d.put("x", self.getX());
+            d.put("y", self.getY());
+            d.put("z", self.getZ());
+            d.put("speed", Math.sqrt(self.getDeltaMovement().x * self.getDeltaMovement().x
+                    + self.getDeltaMovement().z * self.getDeltaMovement().z));
+        }
+        d.putAll(moveM.describe(self == null ? 0 : self.getX(), self == null ? 0 : self.getY(),
+                self == null ? 0 : self.getZ()));
+        return Result.ok(d);
+    }
+
+    /** 每 tick 移动推进（壳侧 tick 钩子；自测在真 tick 间驱动）。 */
+    public void tickMove() {
+        if (!moveM.busy()) {
+            return;
+        }
+        ServerLevel level = ctx.level();
+        LivingEntity self = boundLiving(level);
+        if (level == null || self == null) {
+            return;
+        }
+        if (!movePrimed) {
+            primeMove(self);
+        }
+        double moved = Math.sqrt((self.getX() - lastMoveX) * (self.getX() - lastMoveX)
+                + (self.getZ() - lastMoveZ) * (self.getZ() - lastMoveZ));
+        boolean arrived = false;
+        if (moveM.mode() == io.github.piwugu.snowleopard.tools.MoveMachine.Mode.GOTO) {
+            double[] t = moveM.target();
+            arrived = Math.sqrt((self.getX() - t[0]) * (self.getX() - t[0])
+                            + (self.getZ() - t[2]) * (self.getZ() - t[2]))
+                    < io.github.piwugu.snowleopard.tools.MoveMachine.ARRIVE_EPS
+                    && Math.abs(self.getY() - t[1]) < 1.5;
+        }
+        var outcome = moveM.tick(moved, arrived);
+        lastMoveX = self.getX();
+        lastMoveY = self.getY();
+        lastMoveZ = self.getZ();
+        if (outcome == io.github.piwugu.snowleopard.tools.MoveMachine.Outcome.PROGRESS) {
+            actuate(self);
+        } else {
+            var v = self.getDeltaMovement();
+            self.setDeltaMovement(0, v.y, 0);   // 结束即停水平速度
+        }
+    }
+
+    /** 物理驱动：给水平速度，碰撞/摩擦交给引擎（Mover 唯一底层=引擎物理，禁 setpos）。 */
+    private void actuate(LivingEntity self) {
+        double speed = 0.22;
+        double vx;
+        double vz;
+        if (moveM.mode() == io.github.piwugu.snowleopard.tools.MoveMachine.Mode.GOTO) {
+            double[] t = moveM.target();
+            double dx = t[0] - self.getX();
+            double dz = t[2] - self.getZ();
+            double len = Math.sqrt(dx * dx + dz * dz);
+            if (len < 1e-6) {
+                return;
+            }
+            vx = dx / len * speed;
+            vz = dz / len * speed;
+        } else {
+            double[] dir = moveM.direction();
+            vx = dir[0] * speed;
+            vz = dir[1] * speed;
+        }
+        var v = self.getDeltaMovement();
+        self.setDeltaMovement(vx, v.y, vz);
+    }
+
+    private void primeMove(LivingEntity self) {
+        lastMoveX = self.getX();
+        lastMoveY = self.getY();
+        lastMoveZ = self.getZ();
+        movePrimed = true;
     }
 
     // ── 死亡流（壳侧事件钩子调用）──

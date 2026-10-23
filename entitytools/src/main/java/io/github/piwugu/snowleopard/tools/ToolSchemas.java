@@ -35,6 +35,14 @@ public final class ToolSchemas {
     public static final String INTERACT_BREAK = "break";
     public static final String INTERACT_STATUS = "status";
 
+    // ── move（移动，M4）──
+    public static final String MOVE_MOVE = "move";
+    public static final String MOVE_SNEAK = "sneak";
+    public static final String MOVE_JUMP = "jump";
+    public static final String MOVE_GOTO = "goto";
+    public static final String MOVE_STOP = "stop";
+    public static final String MOVE_STATUS = "status";
+
     // ── entity_self（自我观测）──
     public static final String SELF_STATUS = "status";
 
@@ -109,6 +117,32 @@ public final class ToolSchemas {
                             "reversible", "false", "state", "changes_world")),
             new ToolRegistry.Tool(INTERACT_STATUS, "查询挖掘进行状态与结果",
                     "interact.status() → {outcome, target, elapsed, requiredTicks}",
+                    Map.of("type", "object", "note", "无参数")));
+
+    public static final java.util.List<ToolRegistry.Tool> MOVE_TOOLS = java.util.List.of(
+            new ToolRegistry.Tool(MOVE_MOVE, "移动：方向+时长|距离（三驱动之二；方向=开始时朝向冻结）",
+                    "move.move(direction, duration_ticks?|distance?) → {mode, direction}",
+                    Map.of("type", "object", "required", java.util.List.of("direction"),
+                            "direction", "forward|back|left|right（相对开始时朝向）",
+                            "duration_ticks", "时长驱动", "distance", "距离驱动（二选一）",
+                            "reversible", "true", "state", "changes_world")),
+            new ToolRegistry.Tool(MOVE_SNEAK, "蹲伏姿态开关（独立姿态，非方向）",
+                    "move.sneak(on) → {sneaking}",
+                    Map.of("type", "object", "required", java.util.List.of("on"),
+                            "on", "true|false")),
+            new ToolRegistry.Tool(MOVE_JUMP, "跳跃（需脚下支撑；完成后可再跳）",
+                    "move.jump() → {ok, y}",
+                    Map.of("type", "object", "note", "无参数；vy≤0.08 且脚下支撑才起跳")),
+            new ToolRegistry.Tool(MOVE_GOTO, "移动到坐标（引擎物理滑动；DONE=连续 2 tick 贴住）",
+                    "move.goto(target, max_ticks?) → {mode, target}；进度查 move.status",
+                    Map.of("type", "object", "required", java.util.List.of("target"),
+                            "target", "\"x,y,z\"", "max_ticks", "可选超时（缺省 400）",
+                            "reversible", "true", "state", "changes_world")),
+            new ToolRegistry.Tool(MOVE_STOP, "中断当前移动（立即停）",
+                    "move.stop() → {stopped}",
+                    Map.of("type", "object", "note", "无参数")),
+            new ToolRegistry.Tool(MOVE_STATUS, "查询移动状态（位置/速度/进行中/结果）",
+                    "move.status() → {x,y,z, speed, mode, outcome, age, distToTarget?}",
                     Map.of("type", "object", "note", "无参数")));
 
     private ToolSchemas() {
