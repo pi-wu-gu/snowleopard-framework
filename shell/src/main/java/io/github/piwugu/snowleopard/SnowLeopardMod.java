@@ -63,6 +63,13 @@ public final class SnowLeopardMod {
             opts = opts.withRuntime(runtime);
             WakeBridge.install(runtime);
 
+            // Compressor 注入（AI 执行端 H3）：配置存在才注——记忆自动吸收从"直通"变"真压缩"
+            snowleopard.core.memory.Compressor compressor = io.github.piwugu.snowleopard.host.AiHost.compressorOrNull(gameDir);
+            if (compressor != null) {
+                opts = opts.withCompressor(compressor);
+                LOG.info("[雪豹框架] 记忆压缩器已接 LLM");
+            }
+
             core = SnowLeopard.bootstrap(storage, opts);
 
             List<String> loaded = core.loader().loadDiscovered(
@@ -82,6 +89,13 @@ public final class SnowLeopardMod {
             // 载体（M13）：实体注册（mod 总线）+ 唤醒源（互动/定时/提及）
             AvatarEntities.register(container.getEventBus());
             AvatarWake.init(gameDir, core);
+            // AI 执行端（host 层）：轮询 + 会话 + 工具循环——只在客户端验收模式启用
+            // （全量自测要自己数 pending，host 抢跑会造成假失败）
+            boolean clientTest = Boolean.getBoolean("snowleopard.clienttest");
+            io.github.piwugu.snowleopard.host.AiHost.init(gameDir, core, clientTest);
+            if (clientTest) {
+                net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(io.github.piwugu.snowleopard.host.AiHost::onServerTick);
+            }
 
             core.startupReport().forEach(line -> LOG.info("[雪豹框架] {}", line));
             LOG.info("[雪豹框架] SPI 发现 {} 个: {}；entitytools 骨架 {} 个: {}",

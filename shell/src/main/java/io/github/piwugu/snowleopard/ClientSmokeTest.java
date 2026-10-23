@@ -10,6 +10,7 @@ import net.minecraft.world.entity.monster.ZombifiedPiglin;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 
+import snowleopard.core.SnowLeopard;
 import snowleopard.core.result.Result;
 
 /**
@@ -125,6 +126,19 @@ final class ClientSmokeTest {
         String area = PlayerTestArea.describe();
         if (area != null) {
             ChatPush.push(area);
+        }
+
+        // ⑧ host 自检唤醒（AI 执行端 H4）：配置了 LLM 时，host 会接走这条请求、
+        //    开真会话、模型自己 chat_send 向玩家问好——真机全链路的最后一块
+        SnowLeopard core = SnowLeopardMod.core();
+        if (core != null && io.github.piwugu.snowleopard.host.AiHost.ready()) {
+            Result wake = core.wake().request(
+                    new snowleopard.core.wake.WakeStore.Chain(java.util.List.of("ext-clock")),
+                    "ext-clock", model,
+                    "host 自检：请用 chat_send 向玩家 " + player.getGameProfile().getName()
+                            + " 打一句招呼（简短自然），然后结束本轮。",
+                    "host-selftest", "host-selftest-" + System.currentTimeMillis());
+            ok("host 自检唤醒已登记", !(wake instanceof Result.Error), brief(wake));
         }
 
         SnowLeopardMod.LOG.info("[雪豹框架][CLIENT] ===== 客户端验收结束（看游戏内聊天栏）=====");
