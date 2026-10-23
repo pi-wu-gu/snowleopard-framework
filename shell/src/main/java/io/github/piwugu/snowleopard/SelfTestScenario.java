@@ -92,6 +92,7 @@ public final class SelfTestScenario {
             ok &= runM5(level, rooms[4]);
             ok &= runM6(level, rooms[5]);
             ok &= runM7(level, rooms[6]);
+            ok &= runM9();   // 内置四组走壳侧统一入口（文件能力，不需要房间）
         } catch (Throwable t) {
             ok = false;
             SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST] 场景异常", t);
@@ -1046,6 +1047,148 @@ public final class SelfTestScenario {
                         && String.valueOf(reuse).contains("无效"),
                 "令牌单次使用（复用→无效）", String.valueOf(reuse));
         return ok;
+    }
+
+    /**
+     * M9：内置四组（会话/记忆/任务/笔记）走壳侧统一入口。
+     *
+     * <p>验的是**接线**而不是核心能力（核心侧 42 条已锁）：① 清单进注册表、组简介进上下文；
+     * ② 调用经 {@code EntityToolsRuntime.dispatch} 分流到核心执行面；③ 两个模型的家**盘上分开**
+     * （不只看返回值——内存隔离盘上串是最难发现的形态）；④ 两段式确认在壳里照样生效；
+     * ⑤ 失败是一个失败（未知工具 → Error 带查清单提示）。
+     *
+     * <p>不需要测试房：这四组是文件能力，产物落在 {@code <gameDir>/snowleopard/ids/<模型>/}。
+     * 开工先清本测试自己的两个家（只删测试 ID 目录），否则跨运行残留会让"看不见"断言假失败。
+     */
+    private static boolean runM9() {
+        boolean ok = true;
+        String ma = "selftest-m9a";
+        String mb = "selftest-m9b";
+
+        if (SnowLeopardMod.core() == null) {
+            return step("M9", false, "核心已装配（内置四组全靠它）", "core=null——见启动日志装配失败原因");
+        }
+
+        for (String id : new String[]{ma, mb}) {
+            java.nio.file.Path home = BuiltinRuntime.home(id);
+            if (home != null) {
+                deleteTree(home);
+                BuiltinRuntime.forget(id);   // 句柄一起丢：重建即恢复（文件视图）
+            }
+        }
+
+        // ① 注入面：四组已在注册表，且上下文只进组简介（详解不注入）
+        java.util.List<String> fulls = java.util.List.copyOf(
+                SnowLeopardMod.core().registry().names().fullNames());
+        boolean allGroups = true;
+        for (String g : snowleopard.core.builtin.BuiltinGroups.GROUP_NAMES) {
+            allGroups &= fulls.contains("builtin:core:" + g);
+        }
+        ok &= step("M9", allGroups, "注册表含内置四组（builtin:core:*）", fulls.toString());
+        java.util.List<String> briefs = BuiltinRuntime.briefs();
+        ok &= step("M9", briefs.size() == 4
+                        && !String.join("\n", briefs).contains("ISO 周跨月"),
+                "注入面只有组简介（详解不注入）", briefs.toString());
+
+        // ② 执行面：待办 A 写 A 读，B 看不见
+        Result t1 = EntityToolsRuntime.dispatch(ma, "todo", "todo_add", Map.of("text", "M9-待办"));
+        ok &= step("M9", t1 instanceof Result.Ok, "壳侧分发 todo_add → Ok", String.valueOf(t1));
+        Result la = EntityToolsRuntime.dispatch(ma, "todo", "todo_list", Map.of());
+        Result lb = EntityToolsRuntime.dispatch(mb, "todo", "todo_list", Map.of());
+        ok &= step("M9", String.valueOf(data(la)).contains("M9-待办"),
+                "A 看到自己的待办", String.valueOf(data(la)));
+        ok &= step("M9", lb instanceof Result.Ok && !String.valueOf(data(lb)).contains("M9-待办"),
+                "B 看不到 A 的待办（跨 ID 隔离）", String.valueOf(data(lb)));
+
+        // ③ 笔记：A 写读通，B 读不到（各自的家）
+        Result c1 = EntityToolsRuntime.dispatch(ma, "notes", "note_create",
+                Map.of("path", "m9/note.md", "content", "第一段"));
+        ok &= step("M9", c1 instanceof Result.Ok, "A note_create → Ok", String.valueOf(c1));
+        Result ra = EntityToolsRuntime.dispatch(ma, "notes", "note_read", Map.of("path", "m9/note.md"));
+        ok &= step("M9", String.valueOf(data(ra)).contains("第一段"),
+                "A 读回自己的笔记", String.valueOf(data(ra)));
+        Result rb = EntityToolsRuntime.dispatch(mb, "notes", "note_read", Map.of("path", "m9/note.md"));
+        ok &= step("M9", rb instanceof Result.Error, "B 读不到 A 的笔记", String.valueOf(rb));
+
+        // ④ 两段式：首段给令牌且不删 → 带令牌移入回收站
+        Result d1 = EntityToolsRuntime.dispatch(ma, "notes", "note_delete",
+                Map.of("path", "m9/note.md"));
+        String token = tokenOf(d1);
+        boolean stillThere = EntityToolsRuntime.dispatch(ma, "notes", "note_read",
+                Map.of("path", "m9/note.md")) instanceof Result.Ok;
+        ok &= step("M9", d1 instanceof Result.Ok && !token.isBlank() && stillThere,
+                "note_delete 首段给令牌且未删", String.valueOf(d1));
+        Result d2 = EntityToolsRuntime.dispatch(ma, "notes", "note_delete",
+                Map.of("path", "m9/note.md", "confirm_token", token));
+        ok &= step("M9", d2 instanceof Result.Ok && String.valueOf(data(d2)).contains(".trash"),
+                "带令牌 → 移入回收站", String.valueOf(d2));
+
+        // ⑤ 记忆：空档 → Error 且说明"稀疏是常态"；纠错两段式
+        Result m1 = EntityToolsRuntime.dispatch(ma, "memory", "memory_read",
+                Map.of("level", "day", "period", "2000-01-01"));
+        ok &= step("M9", m1 instanceof Result.Error && String.valueOf(m1).contains("稀疏"),
+                "空档记忆 → Error 且说明稀疏（不是故障）", String.valueOf(m1));
+        Result m2 = EntityToolsRuntime.dispatch(ma, "memory", "memory_correct",
+                Map.of("action", "add", "target_ref", "day:2000-01-01", "note", "M9-口径"));
+        String ctoken = tokenOf(m2);
+        ok &= step("M9", m2 instanceof Result.Ok && !ctoken.isBlank(),
+                "memory_correct 首段给令牌", String.valueOf(m2));
+        Result m3 = EntityToolsRuntime.dispatch(ma, "memory", "memory_correct", Map.of(
+                "action", "add", "target_ref", "day:2000-01-01", "note", "M9-口径",
+                "confirm_token", ctoken));
+        ok &= step("M9", m3 instanceof Result.Ok && String.valueOf(data(m3)).contains("M9-口径"),
+                "带令牌 → 纠错落盘", String.valueOf(m3));
+
+        // ⑥ 失败形态：未知工具 → Error 且提示查清单（不许静默成功）
+        Result u1 = EntityToolsRuntime.dispatch(ma, "todo", "todo_boom", Map.of());
+        ok &= step("M9", u1 instanceof Result.Error && String.valueOf(u1).contains("tool_search"),
+                "未知工具 → Error 且提示查清单", String.valueOf(u1));
+
+        // ⑦ 盘上事实：两个家的 todo.json 各自独立（内存隔离不代表盘上隔离）
+        java.nio.file.Path ta = BuiltinRuntime.home(ma).resolve("todo").resolve("todo.json");
+        java.nio.file.Path tb = BuiltinRuntime.home(mb).resolve("todo").resolve("todo.json");
+        String ca = readFile(ta);
+        String cb = readFile(tb);
+        ok &= step("M9", ca.contains("M9-待办") && !cb.contains("M9-待办"),
+                "盘上分开落盘（A 有 / B 无）", ta + "=" + ca.length() + "B · " + tb + "=" + cb.length() + "B");
+        return ok;
+    }
+
+    private static String tokenOf(Result r) {
+        Object d = data(r);
+        if (d instanceof Map<?, ?> m) {
+            Object v = m.get("confirm_token");
+            return v == null ? "" : String.valueOf(v);
+        }
+        return "";
+    }
+
+    private static String readFile(java.nio.file.Path p) {
+        try {
+            return java.nio.file.Files.exists(p)
+                    ? java.nio.file.Files.readString(p, java.nio.charset.StandardCharsets.UTF_8)
+                    : "";
+        } catch (java.io.IOException e) {
+            return "";
+        }
+    }
+
+    /** 只用于清掉本测试自己的家目录（测试卫生）；失败不炸场景，交由后续断言报。 */
+    private static void deleteTree(java.nio.file.Path dir) {
+        if (dir == null || !java.nio.file.Files.exists(dir)) {
+            return;
+        }
+        try (var walk = java.nio.file.Files.walk(dir)) {
+            walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    java.nio.file.Files.deleteIfExists(p);
+                } catch (java.io.IOException ignored) {
+                    // 单个文件删不掉不阻断（后续断言会暴露）
+                }
+            });
+        } catch (java.io.IOException ignored) {
+            // 同上
+        }
     }
 
     private static Object data(Result r) {

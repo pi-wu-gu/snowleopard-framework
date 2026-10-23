@@ -109,6 +109,11 @@ public final class EntityToolsRuntime {
         if (modelId == null || modelId.isBlank()) {
             return Result.error("dispatch 需要调用方模型编号（core 注入，不可伪造）");
         }
+        // 内置四组（会话/记忆/任务/笔记）走核心执行面——分流必须在实体组解析之前，
+        // 否则会先按 mod:snowleopard: 前缀做权限判定（内置组会一律被拒）
+        if (BuiltinRuntime.isBuiltin(group)) {
+            return BuiltinRuntime.dispatch(modelId, group, tool, params);
+        }
         // 权限门禁预检（核心权限表；组=mod:snowleopard:<group>）
         snowleopard.core.SnowLeopard core = SnowLeopardMod.core();
         if (core != null && core.permissions() != null
