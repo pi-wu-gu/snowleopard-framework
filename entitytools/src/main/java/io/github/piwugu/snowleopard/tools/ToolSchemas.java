@@ -271,6 +271,23 @@ public final class ToolSchemas {
                     "avatar.status() → {avatars:[{uuid, name, primary, intervalSec, nextFireAt, loaded}]}",
                     Map.of("type", "object", "note", "无参数")));
 
+    // ── craft（合成，2026-10-24 03:55 冻结：配方直合成；裁决=不要求工作台邻接、网格不做）──
+    public static final String CRAFT_RECIPES = "craft_recipes";
+    public static final String CRAFT = "craft";
+
+    /** craft 组清单（2 工具）。 */
+    public static final java.util.List<ToolRegistry.Tool> CRAFT_TOOLS = java.util.List.of(
+            new ToolRegistry.Tool(CRAFT_RECIPES, "列可用工作台配方（id/输出/材料清单）",
+                    "craft.recipes(keyword?, limit?) → {matched, truncated, recipes:[{id, output, outputCount, ingredients}]}",
+                    Map.of("type", "object",
+                            "keyword", "按配方 id 或输出名过滤（如 planks / door）",
+                            "limit", "返回上限（缺省 20）")),
+            new ToolRegistry.Tool(CRAFT, "按配方从随身背包扣料合成，产物（含桶/碗退回）回背包",
+                    "craft(recipe_id, count?) → {crafted, output, toPack}；count 1..8；材料不足 → Error 列缺口；背包放不下 → Error 不扣料",
+                    Map.of("type", "object", "required", java.util.List.of("recipe_id"),
+                            "recipe_id", "配方 id（来自 craft_recipes，如 minecraft:oak_planks）",
+                            "count", "合成次数（1..8，缺省 1）")));
+
     private ToolSchemas() {
     }
 }

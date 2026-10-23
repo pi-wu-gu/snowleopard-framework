@@ -54,7 +54,8 @@ public final class EntityToolsProvider extends ToolGroupProvider.Simple {
                 new EntityToolsProvider(GroupNames.WORLD, "world", "世界区域查询（单一工具）", ToolSchemas.WORLD_TOOLS),
                 new EntityToolsProvider(GroupNames.WATCH, "watch", "动态感知（含绑定实体，带控制模型编号）", ToolSchemas.WATCH_TOOLS),
                 new EntityToolsProvider(GroupNames.CHAT, "chat", "聊天：注入未读 / 发言 / 检索（M12）", ToolSchemas.CHAT_TOOLS),
-                new EntityToolsProvider(GroupNames.AVATAR, "avatar", "载体：绑定 / 定时唤醒（M13）", ToolSchemas.AVATAR_TOOLS));
+                new EntityToolsProvider(GroupNames.AVATAR, "avatar", "载体：绑定 / 定时唤醒（M13）", ToolSchemas.AVATAR_TOOLS),
+                new EntityToolsProvider(GroupNames.CRAFT, "craft", "合成：配方发现 + 直合成（H4.6）", ToolSchemas.CRAFT_TOOLS));
     }
 
     /** 冻结的参数 schema 键（M1 起工具 params 用语，防各组各写一套）。 */

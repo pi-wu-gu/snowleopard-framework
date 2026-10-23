@@ -143,6 +143,11 @@ public final class EntityToolsModule {
                     case ToolSchemas.WORLD_QUERY -> worldQuery(params, controllerOf);
                     default -> Result.error("world 组无此工具: " + tool);
                 };
+                case io.github.piwugu.snowleopard.tools.GroupNames.CRAFT -> switch (tool) {
+                    case ToolSchemas.CRAFT_RECIPES -> craftRecipes(params);
+                    case ToolSchemas.CRAFT -> craft(params);
+                    default -> Result.error("craft 组无此工具: " + tool);
+                };
                 case io.github.piwugu.snowleopard.tools.GroupNames.WATCH -> switch (tool) {
                     case ToolSchemas.WATCH_WATCH -> watchStart(params, controllerOf);
                     case ToolSchemas.WATCH_UNWATCH -> watchStop(params);
@@ -1072,6 +1077,202 @@ public final class EntityToolsModule {
      * 区域查询（单一工具，中心|框选）。双护栏：仅已加载区块（note 声明）+ 返回量上限（截断标记）。
      * 含实体时带 controller 归属标注（裁决 §1.4）。
      */
+    // ── craft（H4.6，2026-10-24 03:55：配方直合成；裁决=不要求工作台邻接、网格不做）──
+
+    /** 列可用工作台配方（id/输出/材料；keyword 过滤 id 与输出名）。 */
+    Result craftRecipes(Map<String, Object> params) {
+        ServerLevel level = ctx.level();
+        if (level == null) {
+            return Result.error("无关卡上下文");
+        }
+        String kw = optQuery(params);
+        int limit = params.get("limit") instanceof Number n && n.intValue() > 0 ? n.intValue() : 20;
+        var access = level.registryAccess();
+        var all = level.getServer().getRecipeManager()
+                .getAllRecipesFor(net.minecraft.world.item.crafting.RecipeType.CRAFTING);
+        List<Map<String, Object>> out = new ArrayList<>();
+        int matched = 0;
+        for (var holder : all) {
+            var recipe = holder.value();
+            var result = recipe.getResultItem(access);
+            if (result == null || result.isEmpty()) {
+                continue;
+            }
+            String id = holder.id().toString();
+            String display = result.getHoverName().getString();
+            if (kw != null
+                    && !id.toLowerCase(java.util.Locale.ROOT).contains(kw.toLowerCase(java.util.Locale.ROOT))
+                    && !display.toLowerCase(java.util.Locale.ROOT).contains(kw.toLowerCase(java.util.Locale.ROOT))) {
+                continue;
+            }
+            matched++;
+            if (out.size() < limit) {
+                List<String> ing = new ArrayList<>();
+                for (var x : recipe.getIngredients()) {
+                    if (x.isEmpty()) {
+                        continue;
+                    }
+                    var stacks = x.getItems();
+                    ing.add(stacks.length == 0 ? "?"
+                            : net.minecraft.core.registries.BuiltInRegistries.ITEM
+                                    .getKey(stacks[0].getItem()).toString());
+                }
+                out.add(Map.of("id", id, "output", display,
+                        "outputCount", result.getCount(), "ingredients", ing));
+            }
+        }
+        return Result.ok(Map.of("matched", matched, "truncated", matched > out.size(), "recipes", out));
+    }
+
+    /** 配方直合成：扣随身背包料 → 产物（含桶/碗退回）回背包。事务性：先校验后扣，失败全退。 */
+    Result craft(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        if (!(self instanceof io.github.piwugu.snowleopard.tools.PackCarrier pc)) {
+            return Result.error("绑定的实体没有随身背包（只有 snowleopard:avatar 可合成）");
+        }
+        ServerLevel level = ctx.level();
+        var access = level.registryAccess();
+        String rid = String.valueOf(params.get("recipe_id"));
+        int count = params.get("count") instanceof Number n ? n.intValue() : 1;
+        if (count < 1 || count > 8) {
+            return Result.error("count 1..8: " + count);
+        }
+        net.minecraft.resources.ResourceLocation rl;
+        try {
+            rl = net.minecraft.resources.ResourceLocation.parse(rid);
+        } catch (RuntimeException e) {
+            return Result.error("recipe_id 形如 minecraft:oak_planks: " + rid);
+        }
+        var holderOpt = level.getServer().getRecipeManager().byKey(rl);
+        if (holderOpt.isEmpty() || !(holderOpt.get().value()
+                instanceof net.minecraft.world.item.crafting.CraftingRecipe recipe)) {
+            return Result.error("配方不存在或不是工作台合成配方: " + rid
+                    + "（用 craft_recipes 查）");
+        }
+        var pack = pc.pack();
+
+        // ① 材料校验（逐单位贪婪匹配背包槽；缺口按原料聚合列出）
+        var ingredients = recipe.getIngredients();
+        List<net.minecraft.world.item.crafting.Ingredient> units = new ArrayList<>();
+        for (var ing : ingredients) {
+            if (!ing.isEmpty()) {
+                units.add(ing);
+            }
+        }
+        if (units.isEmpty()) {
+            return Result.error("该配方无材料需求，疑似异常配方");
+        }
+        int[] remaining = new int[pack.getContainerSize()];
+        for (int i = 0; i < remaining.length; i++) {
+            remaining[i] = pack.getItem(i).getCount();
+        }
+        Map<String, Integer> missing = new java.util.LinkedHashMap<>();
+        List<int[]> deductions = new ArrayList<>();   // {槽号, 数量}
+        for (var ing : units) {
+            for (int c = 0; c < count; c++) {
+                boolean found = false;
+                for (int i = 0; i < pack.getContainerSize(); i++) {
+                    if (remaining[i] > 0 && ing.test(pack.getItem(i))) {
+                        remaining[i]--;
+                        deductions.add(new int[]{i, 1});
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    var stacks = ing.getItems();
+                    String desc = stacks.length == 0 ? "?"
+                            : net.minecraft.core.registries.BuiltInRegistries.ITEM
+                                    .getKey(stacks[0].getItem()).toString();
+                    missing.merge(desc, 1, Integer::sum);
+                }
+            }
+        }
+        if (!missing.isEmpty()) {
+            return Result.error("材料不足（需要 " + units.size() * count + " 件），缺口: "
+                    + missing + "——先补料或减少 count");
+        }
+
+        // ② 组装输入并出产物（不再重复 matches——按 id 直取配方）
+        int w = recipe instanceof net.minecraft.world.item.crafting.ShapedRecipe sr
+                ? sr.getWidth() : Math.max(1, ingredients.size());
+        int h = recipe instanceof net.minecraft.world.item.crafting.ShapedRecipe sr2
+                ? sr2.getHeight() : 1;
+        List<net.minecraft.world.item.ItemStack> cells = new ArrayList<>();
+        for (var ing : ingredients) {
+            cells.add(ing.isEmpty() || ing.getItems().length == 0
+                    ? net.minecraft.world.item.ItemStack.EMPTY : ing.getItems()[0].copy());
+        }
+        var input = net.minecraft.world.item.crafting.CraftingInput.of(w, h, cells);
+        var result = recipe.assemble(input, access);
+        if (result.isEmpty()) {
+            return Result.error("配方产物为空（数据包配方异常？）");
+        }
+
+        // ③ 事务：先扣料（记录扣减），产物/余料回填失败 → 全量退料
+        Map<Integer, Integer> deducted = new java.util.LinkedHashMap<>();
+        for (int[] d : deductions) {
+            int slot = d[0];
+            var s = pack.getItem(slot);
+            var left = s.copy();
+            left.setCount(s.getCount() - 1);
+            pack.setItem(slot, left);
+            deducted.merge(slot, 1, Integer::sum);
+        }
+        List<net.minecraft.world.item.ItemStack> toPack = new ArrayList<>();
+        for (int c = 0; c < count; c++) {
+            toPack.add(result.copy());
+        }
+        for (var rem : recipe.getRemainingItems(input)) {
+            if (!rem.isEmpty()) {
+                toPack.add(rem.copy());
+            }
+        }
+        for (var st : toPack) {
+            if (!addToContainer(pack, st)) {
+                // 回滚：产物塞不下——退料（原样长回，物品不消失）
+                for (var e : deducted.entrySet()) {
+                    var s = pack.getItem(e.getKey());
+                    var back = s.copy();
+                    back.setCount(s.getCount() + e.getValue());
+                    pack.setItem(e.getKey(), back);
+                }
+                return Result.error("背包放不下产物（需 " + toPack.size() + " 个位置/堆叠余量）"
+                        + "——先腾格或减小 count；材料已原样退回");
+            }
+        }
+        int crafted = result.getCount() * count;
+        return Result.ok(Map.of("crafted", crafted,
+                "output", result.getHoverName().getString(),
+                "toPack", "self:pack"));
+    }
+
+    /** 向容器塞物品：先并同类堆叠，再进空位；塞不完返回 false（调用方负责回滚）。 */
+    private static boolean addToContainer(net.minecraft.world.Container c,
+                                          net.minecraft.world.item.ItemStack stack) {
+        for (int i = 0; i < c.getContainerSize() && !stack.isEmpty(); i++) {
+            var s = c.getItem(i);
+            if (!s.isEmpty() && net.minecraft.world.item.ItemStack.isSameItemSameComponents(s, stack)) {
+                int room = s.getMaxStackSize() - s.getCount();
+                if (room > 0) {
+                    int move = Math.min(room, stack.getCount());
+                    s.grow(move);
+                    stack.shrink(move);
+                }
+            }
+        }
+        for (int i = 0; i < c.getContainerSize() && !stack.isEmpty(); i++) {
+            if (c.getItem(i).isEmpty()) {
+                c.setItem(i, stack.copy());
+                stack.setCount(0);
+            }
+        }
+        return stack.isEmpty();
+    }
+
     Result worldQuery(Map<String, Object> params,
                       java.util.function.Function<String, String> controllerOf) {
         LivingEntity self = requireBound();

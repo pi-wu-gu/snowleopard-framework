@@ -33,10 +33,12 @@ public final class GroupNames {
     public static final String CHAT = "chat";
     /** 载体（M13）：绑定 / 定时 / 状态。唤醒源（互动/时钟/提及）是事件，不是工具。 */
     public static final String AVATAR = "avatar";
+    /** 合成（H4.6）：配方直合成（配方发现 + 扣料/回填；裁决：不要求工作台邻接）。 */
+    public static final String CRAFT = "craft";
 
     /** 冻结的全部组名（顺序=实施顺序无关，仅稳定枚举）。 */
     public static final List<String> ALL = List.of(
-            SENSE, ENTITY, ENTITY_SELF, MOVE, VIEW, INTERACT, ITEM, WORLD, WATCH, CHAT, AVATAR);
+            SENSE, ENTITY, ENTITY_SELF, MOVE, VIEW, INTERACT, ITEM, WORLD, WATCH, CHAT, AVATAR, CRAFT);
 
     private GroupNames() {
     }

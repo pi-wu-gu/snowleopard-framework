@@ -156,8 +156,9 @@ final class ClientSmokeTest {
                     new snowleopard.core.wake.WakeStore.Chain(java.util.List.of("ext-clock")),
                     "ext-clock", model,
                     "host 自检：请用 chat_send 向玩家 " + player.getGameProfile().getName()
-                            + " 打一句招呼；然后破坏你身旁任意泥土/草方块（interact_break），"
-                            + "观察是否产生掉落物并用 chat_send 告诉玩家结果；然后结束本轮。",
+                            + " 打一句招呼；然后破坏你身旁任意泥土/草方块（interact_break）并查证掉落物；"
+                            + "再用背包里的原木合成木板（craft_recipes 查配方 + craft），"
+                            + "把两件事的结果一起用 chat_send 告诉玩家；然后结束本轮。",
                     "host-selftest", "host-selftest-" + System.currentTimeMillis());
             ok("host 自检唤醒已登记", !(wake instanceof Result.Error), brief(wake));
         }
