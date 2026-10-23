@@ -56,6 +56,13 @@ public final class SnowLeopardMod {
                 LOG.warn("[雪豹框架] 未找到权限文件 {}——以 allowAll 显式装配；生产环境请配置权限文件", permFile);
             }
 
+            // 运行态权威（裁决：双保险 = 进程内表 + shared/run/<id>.lock）——壳与核心共用同一实例，
+            // "会话是否在跑"与"能否被唤起"同源，避免两处各自推断（M5）
+            snowleopard.core.wake.LockFileRuntime runtime =
+                    new snowleopard.core.wake.LockFileRuntime(storage.resolve("shared"));
+            opts = opts.withRuntime(runtime);
+            WakeBridge.install(runtime);
+
             core = SnowLeopard.bootstrap(storage, opts);
 
             List<String> loaded = core.loader().loadDiscovered(

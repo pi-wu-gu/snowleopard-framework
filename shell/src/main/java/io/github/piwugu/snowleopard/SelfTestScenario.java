@@ -93,6 +93,7 @@ public final class SelfTestScenario {
             ok &= runM6(level, rooms[5]);
             ok &= runM7(level, rooms[6]);
             ok &= runM9();   // 内置四组走壳侧统一入口（文件能力，不需要房间）
+            ok &= runM10();  // 协作面：唤醒 + 群组（同样不需要房间）
         } catch (Throwable t) {
             ok = false;
             SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST] 场景异常", t);
@@ -1086,7 +1087,7 @@ public final class SelfTestScenario {
         }
         ok &= step("M9", allGroups, "注册表含内置四组（builtin:core:*）", fulls.toString());
         java.util.List<String> briefs = BuiltinRuntime.briefs();
-        ok &= step("M9", briefs.size() == 4
+        ok &= step("M9", briefs.size() == 6
                         && !String.join("\n", briefs).contains("ISO 周跨月"),
                 "注入面只有组简介（详解不注入）", briefs.toString());
 
@@ -1154,6 +1155,23 @@ public final class SelfTestScenario {
         return ok;
     }
 
+    private static String creatorOf(java.nio.file.Path meta) {
+        return fieldOf(meta, "creator");
+    }
+
+    private static String fieldOf(java.nio.file.Path jsonFile, String key) {
+        try {
+            String text = readFile(jsonFile);
+            if (text.isBlank()) {
+                return "";
+            }
+            Object v = snowleopard.core.json.Json.parseObject(text).get(key);
+            return v == null ? "" : String.valueOf(v);
+        } catch (IllegalArgumentException e) {
+            return "";
+        }
+    }
+
     private static String tokenOf(Result r) {
         Object d = data(r);
         if (d instanceof Map<?, ?> m) {
@@ -1186,6 +1204,215 @@ public final class SelfTestScenario {
                     // 单个文件删不掉不阻断（后续断言会暴露）
                 }
             });
+        } catch (java.io.IOException ignored) {
+            // 同上
+        }
+    }
+
+
+    /**
+     * M10：协作面（唤醒 + 群组）从 MC 侧走通（M5 接线验收）。
+     *
+     * <p>关键一条：**壳不假装执行唤起**——`WakeBridge` 只给 `pending()` 与"明确拒绝并说明原因"，
+     * 真执行属于外部 LLM 宿主。所以这里断言的是"请求登记 → 可见 → 有据可查地失败"，
+     * 而不是"唤起成功"（那会是假成功）。
+     */
+    private static boolean runM10() {
+        boolean ok = true;
+        String ma = "selftest-m10a";
+        String mb = "selftest-m10b";
+        String mc = "selftest-m10c";
+        String md = "selftest-m10d";
+
+        // 卫生：只清本测试自己造的东西（家目录 + 本测试创建的群/唤醒请求）
+        for (String id : new String[]{ma, mb, mc, md}) {
+            java.nio.file.Path home = BuiltinRuntime.home(id);
+            if (home != null) {
+                deleteTree(home);
+                BuiltinRuntime.forget(id);
+                try {
+                    // 清完必须重建空家：group_add 要求"目标已登记"（家目录存在）——
+                    // 只清不建会让第一次加人报"未登记"（2026-10-23 踩过，连锁 6 条假失败）
+                    java.nio.file.Files.createDirectories(BuiltinRuntime.home(id));
+                } catch (java.io.IOException e) {
+                    ok &= step("M10", false, "重建测试 ID 的家", String.valueOf(e));
+                }
+            }
+        }
+        java.nio.file.Path shared = SnowLeopardMod.core().ids().shared();
+        cleanTestGroups(shared, "selftest-m10");
+        cleanTestWakes(shared, "selftest-m10");
+
+        // ① 六组都在注册表（唤醒/群组随核心 0.5.0 自动注册，壳无需复制 schema）
+        java.util.List<String> fulls = java.util.List.copyOf(
+                SnowLeopardMod.core().registry().names().fullNames());
+        ok &= step("M10", fulls.contains("builtin:core:wake") && fulls.contains("builtin:core:group"),
+                "注册表含唤醒与群组两组", fulls.toString());
+
+        // ② 群组：建群 → 加人 → 普通成员加人被拒 → 任命管理 → 管理加人
+        Result c1 = EntityToolsRuntime.dispatch(ma, "group", "group_create", Map.of("name", "M10组"));
+        String gid = String.valueOf(data(c1));
+        gid = gid.contains("gid=") ? gid.replaceAll(".*gid=([^,}]+).*", "$1") : "";
+        ok &= step("M10", c1 instanceof Result.Ok && gid.matches("g\\d{5}"),
+                "建群 → g<seq>", String.valueOf(c1));
+        ok &= step("M10", EntityToolsRuntime.dispatch(ma, "group", "group_add",
+                        Map.of("gid", gid, "model_id", mb)) instanceof Result.Ok,
+                "创建者加人 → Ok", "");
+        Result memberAdd = EntityToolsRuntime.dispatch(mb, "group", "group_add",
+                Map.of("gid", gid, "model_id", mc));
+        ok &= step("M10", memberAdd instanceof Result.Error
+                        && String.valueOf(memberAdd).contains("管理"),
+                "普通成员加人 → Error（需管理级）", String.valueOf(memberAdd));
+        ok &= step("M10", EntityToolsRuntime.dispatch(ma, "group", "group_grant",
+                        Map.of("gid", gid, "model_id", mb, "role", "admin")) instanceof Result.Ok,
+                "创建者任命管理 → Ok", "");
+        ok &= step("M10", EntityToolsRuntime.dispatch(mb, "group", "group_add",
+                        Map.of("gid", gid, "model_id", mc)) instanceof Result.Ok,
+                "管理加人 → Ok", "");
+
+        // ③ 发消息 / 读未读 / 非成员拒绝
+        Result s1 = EntityToolsRuntime.dispatch(ma, "group", "group_send",
+                Map.of("gid", gid, "text", "M10 第一条"));
+        ok &= step("M10", s1 instanceof Result.Ok && String.valueOf(data(s1)).contains("seq=1"),
+                "发消息 → seq=1", String.valueOf(s1));
+        Result readC = EntityToolsRuntime.dispatch(mc, "group", "group_read",
+                Map.of("gid", gid, "limit", 10));
+        ok &= step("M10", String.valueOf(data(readC)).contains("M10 第一条"),
+                "成员读到消息", String.valueOf(data(readC)));
+        Result readD = EntityToolsRuntime.dispatch(md, "group", "group_read",
+                Map.of("gid", gid, "limit", 10));
+        ok &= step("M10", readD instanceof Result.Error
+                        && String.valueOf(readD).contains("非成员"),
+                "非成员读 → Error", String.valueOf(readD));
+
+        // ④ 引用三态（本 ID 家的笔记 → ok → stale → missing）
+        EntityToolsRuntime.dispatch(ma, "notes", "note_create",
+                Map.of("path", "m10/ref.md", "content", "初始"));
+        Result refOk = EntityToolsRuntime.dispatch(ma, "group", "group_send",
+                Map.of("gid", gid, "text", "带引用", "ref", "note:m10/ref.md"));
+        ok &= step("M10", String.valueOf(data(refOk)).contains("state=ok"),
+                "引用 → state=ok", String.valueOf(data(refOk)));
+        EntityToolsRuntime.dispatch(ma, "notes", "note_create",
+                Map.of("path", "m10/ref.md", "content", "改过"));
+        Result refStale = EntityToolsRuntime.dispatch(mc, "group", "group_read",
+                Map.of("gid", gid, "limit", 10, "since_seq", 0));
+        ok &= step("M10", String.valueOf(data(refStale)).contains("state=stale"),
+                "源变更 → state=stale", String.valueOf(data(refStale)));
+        Result delNote = EntityToolsRuntime.dispatch(ma, "notes", "note_delete",
+                Map.of("path", "m10/ref.md"));
+        String tok = String.valueOf(data(delNote)).replaceAll(".*confirm_token=([^,}]+).*", "$1");
+        EntityToolsRuntime.dispatch(ma, "notes", "note_delete",
+                Map.of("path", "m10/ref.md", "confirm_token", tok));
+        Result refMiss = EntityToolsRuntime.dispatch(mc, "group", "group_read",
+                Map.of("gid", gid, "limit", 10, "since_seq", 0));
+        ok &= step("M10", String.valueOf(data(refMiss)).contains("state=missing"),
+                "源丢失 → state=missing", String.valueOf(data(refMiss)));
+
+        // ⑤ 唤醒：登记 → pending 可见 → 在运行则失败 → 明确拒绝（不假装成功）
+        Result w1 = EntityToolsRuntime.dispatch(ma, "wake", "wake",
+                Map.of("model_id", mb, "prompt", "巡检", "reason", "M10", "client_req_id", "m10-1"));
+        String reqId = String.valueOf(data(w1)).replaceAll(".*reqId=([^,}]+).*", "$1");
+        ok &= step("M10", w1 instanceof Result.Ok && reqId.startsWith("w"),
+                "唤起 → 登记为 pending", String.valueOf(w1));
+        ok &= step("M10", WakeBridge.pending().stream().anyMatch(r -> r.reqId().equals(reqId)),
+                "宿主 poll 能看到待执行请求（壳不自动执行）", "pending=" + WakeBridge.pending().size());
+
+        ok &= step("M10", WakeBridge.beginSession(mb), "β 会话开始（运行态权威：锁文件）", "");
+        Result w2 = EntityToolsRuntime.dispatch(ma, "wake", "wake",
+                Map.of("model_id", mb, "reason", "M10-dup"));
+        ok &= step("M10", w2 instanceof Result.Error && String.valueOf(w2).contains("正在运行"),
+                "目标在运行 → Error（不排队）", String.valueOf(w2));
+        WakeBridge.endSession(mb);
+
+        Result w3 = EntityToolsRuntime.dispatch(ma, "wake", "wake", Map.of("model_id", ma));
+        ok &= step("M10", w3 instanceof Result.Error && String.valueOf(w3).contains("自身"),
+                "自唤起 → Error", String.valueOf(w3));
+
+        Result reject = WakeBridge.rejectUnrunnable(reqId,
+                "框架壳没有 LLM 会话驱动——请求已登记，需外部宿主执行");
+        ok &= step("M10", reject instanceof Result.Ok
+                        && String.valueOf(data(reject)).contains("failed"),
+                "无法执行时明确回写 failed（不造假成功）", String.valueOf(reject));
+        Result st = EntityToolsRuntime.dispatch(ma, "wake", "wake_status", Map.of("req_id", reqId));
+        ok &= step("M10", String.valueOf(data(st)).contains("failed")
+                        && String.valueOf(data(st)).contains("LLM"),
+                "发起方查状态 → failed 且原因可见", String.valueOf(data(st)));
+
+        // ⑥ 汇总一行（群未读每轮报；新消息只报一次）——先制造一条未读（γ 已读完 1、2）
+        Result s3 = EntityToolsRuntime.dispatch(mb, "group", "group_send",
+                Map.of("gid", gid, "text", "M10 第三条"));
+        ok &= step("M10", s3 instanceof Result.Ok, "管理再发一条（制造未读）", String.valueOf(s3));
+        String line = WakeBridge.turnLine(mc);
+        ok &= step("M10", line != null && line.contains("群组未读"),
+                "轮末汇总含群未读", String.valueOf(line));
+        WakeBridge.consumeTurnLine(mc);
+        String line2 = WakeBridge.turnLine(mc);
+        ok &= step("M10", line2 != null && line2.contains("群组未读")
+                        && !line2.contains("新消息"),
+                "提示一次：新消息段消失、未读仍报", String.valueOf(line2));
+
+        // ⑦ 盘上事实：消息 append-only 落盘、唤醒请求落盘
+        java.nio.file.Path msgs = shared.resolve("groups").resolve(gid).resolve("messages.jsonl");
+        ok &= step("M10", java.nio.file.Files.exists(msgs) && lines(msgs) >= 2,
+                "群消息 append-only 落盘（≥2 行）", msgs + "=" + lines(msgs));
+        ok &= step("M10", java.nio.file.Files.exists(shared.resolve("wake").resolve(reqId + ".json")),
+                "唤醒请求落盘 shared/wake/", reqId);
+
+        // ⑧ 解散（创建者）；非创建者被拒
+        Result disbandByAdmin = EntityToolsRuntime.dispatch(mb, "group", "group_disband",
+                Map.of("gid", gid));
+        ok &= step("M10", disbandByAdmin instanceof Result.Error,
+                "非创建者解散 → Error", String.valueOf(disbandByAdmin));
+        Result disband = EntityToolsRuntime.dispatch(ma, "group", "group_disband", Map.of("gid", gid));
+        ok &= step("M10", disband instanceof Result.Ok
+                        && String.valueOf(data(disband)).contains(".recycled"),
+                "创建者解散 → 进回收区", String.valueOf(disband));
+        return ok;
+    }
+
+    private static long lines(java.nio.file.Path p) {
+        try {
+            return java.nio.file.Files.readAllLines(p).stream().filter(s -> !s.isBlank()).count();
+        } catch (java.io.IOException e) {
+            return -1;
+        }
+    }
+
+    /** 清掉本测试创建的群（只认创建者前缀；别人的群一条不动）。 */
+    private static void cleanTestGroups(java.nio.file.Path shared, String prefix) {
+        java.nio.file.Path dir = shared.resolve("groups");
+        if (!java.nio.file.Files.isDirectory(dir)) {
+            return;
+        }
+        try (var list = java.nio.file.Files.list(dir)) {
+            for (java.nio.file.Path p : list.toList()) {
+                java.nio.file.Path meta = p.resolve("meta.json");
+                if (!java.nio.file.Files.isRegularFile(meta)) {
+                    continue;
+                }
+                if (creatorOf(meta).startsWith(prefix)) {
+                    deleteTree(p);
+                }
+            }
+        } catch (java.io.IOException ignored) {
+            // 清理失败不影响断言（断言只看本次 gid）
+        }
+    }
+
+    /** 清掉本测试发出的唤醒请求（只认 from/to 前缀）。 */
+    private static void cleanTestWakes(java.nio.file.Path shared, String prefix) {
+        java.nio.file.Path dir = shared.resolve("wake");
+        if (!java.nio.file.Files.isDirectory(dir)) {
+            return;
+        }
+        try (var list = java.nio.file.Files.list(dir)) {
+            for (java.nio.file.Path p : list.toList()) {
+                String from = fieldOf(p, "from");
+                String to = fieldOf(p, "to");
+                if (from.startsWith(prefix) || to.startsWith(prefix)) {
+                    java.nio.file.Files.deleteIfExists(p);
+                }
+            }
         } catch (java.io.IOException ignored) {
             // 同上
         }
