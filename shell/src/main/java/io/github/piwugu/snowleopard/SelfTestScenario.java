@@ -96,6 +96,7 @@ public final class SelfTestScenario {
             ok &= runM10();  // 协作面：唤醒 + 群组（同样不需要房间）
             ok &= runM11(level, rooms[7]);   // 聊天栏推送 + 中立生物绑定（借 M8 房，用完即杀）
             ok &= runM12();  // 聊天工具组：记录/注入块/两段式/提示与已读两维/搜索（文件能力）
+            ok &= runM13(level, rooms[6]);   // 载体：绑定/定时/提及唤醒（借 M7 房，用完即杀）
         } catch (Throwable t) {
             ok = false;
             SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST] 场景异常", t);
@@ -1650,6 +1651,122 @@ public final class SelfTestScenario {
         } catch (java.io.IOException ignored) {
             // 清理失败不影响断言（断言只看本次内容）
         }
+    }
+
+
+    /**
+     * M13：载体与唤醒源（2026-10-24 01:30 (UTC+8)，分析见 `docs/实体载体与唤醒源可行性分析-2026-10-23.md`）。
+     *
+     * <p>验四件事：① 绑定链在载体上走通（pick → avatar_bind → 主载体唯一）；
+     * ② 定时按真实时间推进、**跳过不堆积**；③ 提及唤醒只认名称（编号只提示）；
+     * ④ 死亡解绑。右键/被打的事件路径留给真机（事件对象难以自造，核心逻辑与提及同一条 requestWake）。
+     */
+    private static boolean runM13(ServerLevel level, BlockPos base) {
+        boolean ok = true;
+        String model = "selftest-m13";
+        String model2 = "selftest-m13b";
+
+        for (String id : new String[]{model, model2}) {
+            java.nio.file.Path h = BuiltinRuntime.home(id);
+            if (h != null) {
+                deleteTree(h);
+                BuiltinRuntime.forget(id);
+                try {
+                    java.nio.file.Files.createDirectories(BuiltinRuntime.home(id));
+                } catch (java.io.IOException e) {
+                    return step("M13", false, "重建家", String.valueOf(e));
+                }
+            }
+        }
+
+        EntityToolsRuntime.setScanAnchor(model, base);   // 漏了它 open 就扫不到房里的载体（M11 同款）
+        EntityToolsRuntime.setScanAnchor(model2, base);
+
+        // ① 生成两只载体（/summon snowleopard:avatar 的等价路径）
+        io.github.piwugu.snowleopard.AvatarEntity a1 = new io.github.piwugu.snowleopard.AvatarEntity(
+                io.github.piwugu.snowleopard.AvatarEntities.AVATAR.get(), level);
+        a1.setPersistenceRequired();
+        a1.moveTo(base.getX() + 0.5, base.getY(), base.getZ() + 0.5, 0, 0);
+        level.addFreshEntity(a1);
+        ok &= step("M13", a1.isAlive(), "载体生成（/summon snowleopard:avatar 的等价路径）", a1.getStringUUID());
+
+        // ② 绑定链：open → pick → avatar_bind
+        Result open = EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
+        ok &= step("M13", String.valueOf(data(open)).contains(a1.getStringUUID()),
+                "载体进候选", String.valueOf(data(open)));
+        ok &= step("M13", EntityToolsRuntime.dispatch(model, "entity", "pick",
+                        Map.of("target", a1.getStringUUID())) instanceof Result.Ok,
+                "pick 载体", "");
+        Result bind1 = EntityToolsRuntime.dispatch(model, "avatar", "avatar_bind", Map.of());
+        ok &= step("M13", bind1 instanceof Result.Ok && String.valueOf(data(bind1)).contains("primary=true"),
+                "avatar_bind → 主载体", String.valueOf(data(bind1)));
+
+        // ③ 主载体唯一：同一模型绑第二只 → 旧主降级
+        io.github.piwugu.snowleopard.AvatarEntity a2 = new io.github.piwugu.snowleopard.AvatarEntity(
+                io.github.piwugu.snowleopard.AvatarEntities.AVATAR.get(), level);
+        a2.setPersistenceRequired();
+        a2.moveTo(base.getX() + 2.5, base.getY(), base.getZ() + 0.5, 0, 0);
+        level.addFreshEntity(a2);
+        EntityToolsRuntime.dispatch(model, "entity", "unbind", Map.of());
+        EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
+        EntityToolsRuntime.dispatch(model, "entity", "pick", Map.of("target", a2.getStringUUID()));
+        Result bind2 = EntityToolsRuntime.dispatch(model, "avatar", "avatar_bind", Map.of());
+        ok &= step("M13", bind2 instanceof Result.Ok, "换绑第二只", String.valueOf(data(bind2)));
+        io.github.piwugu.snowleopard.tools.avatar.AvatarStore store = ChatRuntime.avatarStore();
+        ok &= step("M13", store.primaryOf(model).uuid().equals(a2.getStringUUID())
+                        && store.byUuid(a1.getStringUUID()) != null
+                        && !store.byUuid(a1.getStringUUID()).primary(),
+                "主载体唯一（旧主降级但保留）", "");
+
+        // ④ 禁重名（裁决 4）：a2 起名"小白"（重绑生效），a1 也叫"小白"由 m13b 绑 → 拒绝
+        a2.setCustomName(net.minecraft.network.chat.Component.literal("小白"));
+        Result rename = EntityToolsRuntime.dispatch(model, "avatar", "avatar_bind", Map.of());
+        ok &= step("M13", rename instanceof Result.Ok
+                        && String.valueOf(data(rename)).contains("name=小白"),
+                "载体改名经重绑生效（身份单点：chat_send/摘要/提及全用它）", String.valueOf(data(rename)));
+        a1.setCustomName(net.minecraft.network.chat.Component.literal("小白"));
+        EntityToolsRuntime.dispatch(model2, "sense", "open", Map.of());
+        EntityToolsRuntime.dispatch(model2, "entity", "pick", Map.of("target", a1.getStringUUID()));
+        Result conflict = EntityToolsRuntime.dispatch(model2, "avatar", "avatar_bind", Map.of());
+        ok &= step("M13", conflict instanceof Result.Error && String.valueOf(conflict).contains("重名"),
+                "重名绑定 → Error（提及唤醒无法区分谁被点名）", String.valueOf(conflict));
+
+        // ⑤ 定时：下限 60 秒 + 到期触发 + 不堆积
+        Result sched = EntityToolsRuntime.dispatch(model, "avatar", "avatar_schedule",
+                Map.of("interval_sec", 60));
+        ok &= step("M13", sched instanceof Result.Ok, "定时 60 秒 → Ok", String.valueOf(data(sched)));
+        Result tooFast = EntityToolsRuntime.dispatch(model, "avatar", "avatar_schedule",
+                Map.of("interval_sec", 10));
+        ok &= step("M13", tooFast instanceof Result.Error, "10 秒 → Error（下限 60）",
+                String.valueOf(tooFast));
+        store.setNextFireAt(a2.getStringUUID(), System.currentTimeMillis() - 1);
+        AvatarWake.runScheduler(level.getServer());
+        long pendingClock = WakeBridge.pendingCount("ext-clock", model);
+        ok &= step("M13", pendingClock >= 1, "到期 → ext-clock 的 pending 请求", "count=" + pendingClock);
+        AvatarWake.runScheduler(level.getServer());
+        ok &= step("M13", WakeBridge.pendingCount("ext-clock", model) == pendingClock,
+                "再跑一次不堆积（跳过不补发）", "");
+
+        // ⑥ 提及唤醒：只认名称（编号只提示）——先清冷却，别让⑤的定时唤醒把这里吞掉
+        AvatarWake.resetCooldowns();
+        long before = WakeBridge.pendingCount("any", model);
+        ChatRuntime.record("PLAYER", "Steve", "小白 过来一下", "");
+        ok &= step("M13", WakeBridge.pendingCount("any", model) == before + 1,
+                "名称点名 → 唤醒请求", "");
+        int mentionsBefore = ChatRuntime.mentionsPending(model);
+        ChatRuntime.record("PLAYER", "Steve", "selftest-m13 你也在吧", "");
+        ok &= step("M13", WakeBridge.pendingCount("any", model) == before + 1,
+                "编号点名 → 只提示、不唤醒", "");
+        ok &= step("M13", ChatRuntime.mentionsPending(model) == mentionsBefore + 1,
+                "但提示 +1（提示 ≠ 唤醒）", "");
+
+        // ⑦ 死亡解绑
+        a2.hurt(level.damageSources().generic(), 1000f);
+        ok &= step("M13", !a2.isAlive() && store.primaryOf(model) == null,
+                "载体死亡 → 解绑", "");
+        EntityToolsRuntime.dispatch(model, "avatar", "avatar_unbind", Map.of());
+        a1.discard();
+        return ok;
     }
 
     private static Object data(Result r) {

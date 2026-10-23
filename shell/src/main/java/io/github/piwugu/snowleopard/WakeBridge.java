@@ -92,6 +92,28 @@ public final class WakeBridge {
     }
 
     /** 注入后记账（提示一次）：只标已提示，不动已读游标。 */
+    /**
+     * 数 pending 请求（自测用）。
+     *
+     * @param fromPrefix 发起方前缀（"any" = 不限；外部触发是 ext-clock / ext-player-* / ext-mention-*）
+     * @param toModel    目标模型（"any" = 不限）
+     */
+    public static long pendingCount(String fromPrefix, String toModel) {
+        SnowLeopard core = SnowLeopardMod.core();
+        if (core == null) {
+            return 0;
+        }
+        long n = 0;
+        for (var r : core.wake().pending()) {
+            boolean fromOk = "any".equals(fromPrefix) || r.from().startsWith(fromPrefix);
+            boolean toOk = "any".equals(toModel) || r.to().equals(toModel);
+            if (fromOk && toOk) {
+                n++;
+            }
+        }
+        return n;
+    }
+
     public static void consumeTurnLine(String modelId) {
         var scope = BuiltinRuntime.scope(modelId);
         if (scope != null) {

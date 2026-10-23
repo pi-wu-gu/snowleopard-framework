@@ -40,14 +40,15 @@ class ToolSchemasMatrixTest {
         all.addAll(ToolSchemas.WORLD_TOOLS);
         all.addAll(ToolSchemas.WATCH_TOOLS);
         all.addAll(ToolSchemas.CHAT_TOOLS);
+        all.addAll(ToolSchemas.AVATAR_TOOLS);
         return all;
     }
 
     @Test
     void tenGroupsFrozen() {
-        assertEquals(10, GroupNames.ALL.size(), "十组名冻结（组名不冒号）");
-        assertEquals(35, all().size(),
-                "工具面 10 组 35 工具（M12 新增 chat 4 个）——超差即清单漂移，须同步接入文档");
+        assertEquals(11, GroupNames.ALL.size(), "十一组名冻结（组名不冒号）");
+        assertEquals(39, all().size(),
+                "工具面 11 组 39 工具（M13 新增 avatar 4 个）——超差即清单漂移，须同步接入文档");
     }
 
     @Test

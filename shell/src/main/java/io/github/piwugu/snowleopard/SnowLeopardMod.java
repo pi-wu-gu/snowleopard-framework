@@ -79,6 +79,9 @@ public final class SnowLeopardMod {
 
             // 聊天组执行面（M12）：存储挂 shared/chat，游标挂各自的家
             ChatRuntime.init(gameDir, core);
+            // 载体（M13）：实体注册（mod 总线）+ 唤醒源（互动/定时/提及）
+            AvatarEntities.register(container.getEventBus());
+            AvatarWake.init(gameDir, core);
 
             core.startupReport().forEach(line -> LOG.info("[雪豹框架] {}", line));
             LOG.info("[雪豹框架] SPI 发现 {} 个: {}；entitytools 骨架 {} 个: {}",
@@ -99,6 +102,13 @@ public final class SnowLeopardMod {
             // 启动时清一次过期聊天（不在 tick 里扫盘）
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(
                     (net.neoforged.neoforge.event.server.ServerStartedEvent e) -> ChatRuntime.pruneOnStart());
+            // 载体唤醒源（M13）：右键 / 被打（可配）/ 每 20 tick 调度 / 死亡解绑
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(AvatarWake::onInteract);
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(
+                    net.neoforged.bus.api.EventPriority.LOWEST, true, AvatarWake::onAttacked);
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(AvatarWake::onServerTick);
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(
+                    net.neoforged.bus.api.EventPriority.LOWEST, true, AvatarWake::onDeath);
             // 客户端验收模式（-Dsnowleopard.clienttest=true）：只跑"绑定中立生物 + 推送一行"。
             // 全量自测收尾会 server.halt(false)，在集成服务器上等于把客户端关掉，所以必须分道
             if (Boolean.getBoolean("snowleopard.clienttest")) {

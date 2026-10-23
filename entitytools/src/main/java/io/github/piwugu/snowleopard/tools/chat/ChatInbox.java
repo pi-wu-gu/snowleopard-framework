@@ -178,6 +178,18 @@ public final class ChatInbox {
         return hit;
     }
 
+    /**
+     * 直接 +1（**唤醒失败补提示**用）：不走扫描，因为触发原因不是聊天正文而是唤醒结果。
+     */
+    public void addPendingMention(String model) {
+        requireModel(model);
+        synchronized (lock) {
+            Cursor c = cursor(model);
+            write(cursorFileOf.apply(model), new Cursor(c.lastReadSeq(), c.lastScanSeq(),
+                    c.pendingMentions() + 1));
+        }
+    }
+
     /** 待提示的提及次数（进摘要行 {@code · 被提及 M 次}）。 */
     public int pendingMentions(String model) {
         return cursor(model).pendingMentions();

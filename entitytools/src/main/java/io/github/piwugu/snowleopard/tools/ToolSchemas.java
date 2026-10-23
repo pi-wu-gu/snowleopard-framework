@@ -249,6 +249,28 @@ public final class ToolSchemas {
                     "chat.status() → {lastReadSeq, lastScanSeq, pendingMentions, lastSeq, unread}",
                     Map.of("type", "object", "note", "无参数")));
 
+    // ── avatar（M13：载体绑定 / 定时唤醒）──
+    public static final String AVATAR_BIND = "avatar_bind";
+    public static final String AVATAR_UNBIND = "avatar_unbind";
+    public static final String AVATAR_SCHEDULE = "avatar_schedule";
+    public static final String AVATAR_STATUS = "avatar_status";
+
+    /** 载体组清单（M13-0 冻结，2026-10-24 01:10 (UTC+8)）。 */
+    public static final java.util.List<ToolRegistry.Tool> AVATAR_TOOLS = java.util.List.of(
+            new ToolRegistry.Tool(AVATAR_BIND, "把当前绑定的实体登记为我的载体（唤醒的靶子；重复绑定=换主载体）",
+                    "avatar.bind() → {uuid, name, primary}；实体必须是 snowleopard:avatar；重名（与其它载体）→ 拒绝",
+                    Map.of("type", "object", "note", "无参数；实体来自 entity.pick")),
+            new ToolRegistry.Tool(AVATAR_UNBIND, "解除我的全部载体绑定（含定时）",
+                    "avatar.unbind() → {removed}",
+                    Map.of("type", "object", "note", "无参数")),
+            new ToolRegistry.Tool(AVATAR_SCHEDULE, "设定定时唤醒间隔（真实时间，下限 60 秒）",
+                    "avatar.schedule(interval_sec) → {intervalSec, nextFireAt}；实体未加载时跳过不补发",
+                    Map.of("type", "object", "required", java.util.List.of("interval_sec"),
+                            "interval_sec", "间隔秒数（>=60，下限由配置可抬不可降）")),
+            new ToolRegistry.Tool(AVATAR_STATUS, "查询我的载体与唤醒排程",
+                    "avatar.status() → {avatars:[{uuid, name, primary, intervalSec, nextFireAt, loaded}]}",
+                    Map.of("type", "object", "note", "无参数")));
+
     private ToolSchemas() {
     }
 }

@@ -164,6 +164,11 @@ public final class ChatRuntime {
         List<String> mentioned = ChatRecord.PLAYER.equals(source)
                 ? inbox.noteMention(r, targets)
                 : List.of();
+        // 名称命中（且模型有载体）→ 触发"点名唤醒"（编号命中只提示，不进这里）
+        if (!mentioned.isEmpty()) {
+            String player = ChatRecord.PLAYER.equals(source) ? name : "";
+            AvatarWake.onMentions(mentioned, text, player);
+        }
         return new Recorded(r, mentioned);
     }
 
@@ -192,8 +197,25 @@ public final class ChatRuntime {
      * 各拼一份就会漂（"改名之后前缀没变"这类问题最难查）。
      */
     public static String displayName(String model) {
-        // M13：这里改成读绑定载体的 CustomName（有名称用名称）
+        // M13：载体有名称用名称（这是"身份解析单点"——chat_send 前缀 / 摘要 / 提及回执三处共用）
+        if (model != null && AvatarWake.ready()) {
+            io.github.piwugu.snowleopard.tools.avatar.AvatarStore.Entry e = AvatarWake.primaryName(model);
+            if (e != null && !e.name().isBlank()) {
+                return e.name();
+            }
+        }
         return model == null ? "" : model;
+    }
+
+    /** 唤醒失败时的兜底：给该模型补一条"被提及"（裁决——这件事不能凭空消失）。 */
+    public static void addPendingMention(String model) {
+        if (ready() && model != null && !model.isBlank()) {
+            try {
+                inbox.addPendingMention(model);
+            } catch (RuntimeException e) {
+                SnowLeopardMod.LOG.warn("[雪豹框架][聊天] 补提示失败: {}", e.getMessage());
+            }
+        }
     }
 
     // ------------------------------------------------------------- 工具执行
@@ -440,6 +462,16 @@ public final class ChatRuntime {
         } catch (RuntimeException e) {
             SnowLeopardMod.LOG.warn("[雪豹框架][聊天] 清理失败: {}", e.getMessage());
         }
+    }
+
+    /** 待提示的提及次数（自测/诊断用）。 */
+    public static int mentionsPending(String model) {
+        return ready() && model != null && !model.isBlank() ? inbox.pendingMentions(model) : 0;
+    }
+
+    /** 载体登记表（自测/诊断用；null = 未装配）。 */
+    public static io.github.piwugu.snowleopard.tools.avatar.AvatarStore avatarStore() {
+        return AvatarWake.store();
     }
 
     public static ChatLog logOrNull() {
