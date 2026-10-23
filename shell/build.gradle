@@ -47,13 +47,35 @@ neoForge {
     runs {
         client {
             client()
+            gameDirectory = project.file('run-client')   // 真机 GUI 验收（2026-10-23）
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            // 客户端验收：./gradlew runClient -PclientTest -PquickPlay=<存档名>
+            // 只跑"绑定中立生物 + 推送一行"，不建塔、不 halt（全量自测会把自己关掉）
+            if (providers.gradleProperty('clientTest').isPresent()) {
+                systemProperty 'snowleopard.clienttest', 'true'
+            }
+            def qp = providers.gradleProperty('quickPlay').orNull
+            if (qp) {
+                programArguments.addAll('--quickPlaySingleplayer', qp)
+            }
+            // 连真实服务器（真客户端 + 真服务器 + 真聊天栏）：
+            // ./gradlew runClient -PquickPlayMp=localhost:25565
+            // dev 客户端下 quickPlay 参数无效（实测两次都停在标题界面）——改由模组自己连：
+            // 系统属性 snowleopard.autoconnect，模组在标题界面出现时发起连接（ClientAutoConnect）
+            def mp = providers.gradleProperty('quickPlayMp').orNull
+            if (mp) {
+                systemProperty 'snowleopard.autoconnect', mp
+            }
         }
         server {
             server()
             programArgument '--nogui'
             gameDirectory = project.file('run-server')   // 真机自测通道（M1 起）
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            // -PclientTest：服务器也进验收模式（等真人连进来再验证推送），不跑全量自测
+            if (providers.gradleProperty('clientTest').isPresent()) {
+                systemProperty 'snowleopard.clienttest', 'true'
+            }
         }
         configureEach {
             logLevel = org.slf4j.event.Level.INFO

@@ -50,3 +50,6 @@ run/
 shell/run-server/*
 !shell/run-server/eula.txt
 !shell/run-server/server.properties
+
+# 客户端验收目录：日志/存档/配置全是本地产物，一条都不入库（2026-10-23 误提交过一次）
+shell/run-client/
