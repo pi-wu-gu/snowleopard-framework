@@ -52,7 +52,8 @@ public final class EntityToolsProvider extends ToolGroupProvider.Simple {
                 new EntityToolsProvider(GroupNames.INTERACT, "interact", "交互（攻击/使用/放置/破坏）", ToolSchemas.INTERACT_TOOLS),
                 new EntityToolsProvider(GroupNames.ITEM, "item", "物品（双索引检索/容器/移动）", ToolSchemas.ITEM_TOOLS),
                 new EntityToolsProvider(GroupNames.WORLD, "world", "世界区域查询（单一工具）", ToolSchemas.WORLD_TOOLS),
-                new EntityToolsProvider(GroupNames.WATCH, "watch", "动态感知（含绑定实体，带控制模型编号）", ToolSchemas.WATCH_TOOLS));
+                new EntityToolsProvider(GroupNames.WATCH, "watch", "动态感知（含绑定实体，带控制模型编号）", ToolSchemas.WATCH_TOOLS),
+                new EntityToolsProvider(GroupNames.CHAT, "chat", "聊天：注入未读 / 发言 / 检索（M12）", ToolSchemas.CHAT_TOOLS));
     }
 
     /** 冻结的参数 schema 键（M1 起工具 params 用语，防各组各写一套）。 */

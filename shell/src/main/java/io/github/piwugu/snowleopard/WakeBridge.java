@@ -80,8 +80,15 @@ public final class WakeBridge {
         if (scope == null) {
             return null;
         }
-        return TurnSummary.line(modelId, scope.groups(), scope.wake(),
+        String base = TurnSummary.line(modelId, scope.groups(), scope.wake(),
                 scope.memory(), java.time.LocalDate.now());
+        // 聊天段在核心之外（core 不认识 MC 聊天），所以在这里追加——
+        // 全仓只有这一处拼摘要，别处不许自己拼（"同一注入点统一装配"）
+        String chat = ChatRuntime.turnSegment(modelId);
+        if (chat == null) {
+            return base;
+        }
+        return base == null ? "提醒：" + chat : base + " · " + chat;
     }
 
     /** 注入后记账（提示一次）：只标已提示，不动已读游标。 */
@@ -90,5 +97,7 @@ public final class WakeBridge {
         if (scope != null) {
             TurnSummary.consume(modelId, scope.groups(), scope.wake());
         }
+        // 只清"被提及"（提示一次）；"新聊天 N 条"要等真被 pull+ack 才消失
+        ChatRuntime.consume(modelId);
     }
 }

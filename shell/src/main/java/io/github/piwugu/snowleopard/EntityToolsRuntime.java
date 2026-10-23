@@ -120,6 +120,10 @@ public final class EntityToolsRuntime {
                 && !core.permissions().table().allows("mod:snowleopard:" + group, tool)) {
             return Result.error("权限拒绝: mod:snowleopard:" + group + "." + tool + "（权限文件可改判）");
         }
+        // 聊天组：权限预检已过（组全名 mod:snowleopard:chat），执行面在 ChatRuntime
+        if (ChatRuntime.isChat(group)) {
+            return ChatRuntime.dispatch(modelId, tool, params);
+        }
         EntityToolsModule m = module(modelId);
         return m.call(group, tool, params, ref -> {
             for (Map.Entry<String, EntityToolsModule> e : MODULES.entrySet()) {

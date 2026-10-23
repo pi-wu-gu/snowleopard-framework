@@ -215,6 +215,40 @@ public final class ToolSchemas {
                             "kind 枚举", "TRAJECTORY|ATTACKED|DIED（写死）",
                             "窗口", "条数 64/实体 + 时间 1200 tick 双淘汰；轨迹限频 10 tick")));
 
+    // ── chat（M12：注入 / 发言 / 检索）──
+    public static final String CHAT_SEND = "chat_send";
+    public static final String CHAT_READ = "chat_read";
+    public static final String CHAT_SEARCH = "chat_search";
+    public static final String CHAT_STATUS = "chat_status";
+
+    /**
+     * 聊天组清单（M12-0 冻结，2026-10-24 00:50 (UTC+8)）。
+     *
+     * <p>**没有 `chat_mentions`**：被提及只进轮末摘要那一行（`· 被提及 M 次`），
+     * 想看正文用 `chat_search`。多一个"调了也没内容"的工具只会误导模型。
+     */
+    public static final java.util.List<ToolRegistry.Tool> CHAT_TOOLS = java.util.List.of(
+            new ToolRegistry.Tool(CHAT_SEND, "以载体身份在聊天栏发言（玩家可见，不可撤回）",
+                    "chat.send(text) → {delivered, name}；最小间隔 0.5s（可配），超限报错并给剩余等待",
+                    Map.of("type", "object", "required", java.util.List.of("text"),
+                            "text", "要说的话（≤256 字符；会带上 [雪豹·<名称>] 前缀）")),
+            new ToolRegistry.Tool(CHAT_READ, "显式读取未读聊天全文（读取即推进游标，之后不再自动注入）",
+                    "chat.read(limit?) → {messages:[{seq, ts, name, text}]}",
+                    Map.of("type", "object", "limit", "条数上限（缺省 20）",
+                            "note", "只含玩家来源；要查别的模型说过什么用 chat_search")),
+            new ToolRegistry.Tool(CHAT_SEARCH, "按天 + 关键词 + 时间窗检索聊天（含模型自己说过的话）",
+                    "chat.search(keyword?, date?, since?, until?, source?, limit?) → {matched, scanned, truncated, hits}",
+                    Map.of("type", "object",
+                            "keyword", "空格分词，全部命中（AND），大小写不敏感",
+                            "date", "YYYY-MM-DD（缺省=今天）",
+                            "since", "HH:MM 或 yyyy-MM-dd HH:mm（含）",
+                            "until", "同上（含）",
+                            "source", "PLAYER|MODEL（缺省=全部）",
+                            "limit", "命中上限（缺省 20，最大 100）")),
+            new ToolRegistry.Tool(CHAT_STATUS, "查询我的聊天游标（未读数 / 被提及次数）",
+                    "chat.status() → {lastReadSeq, lastScanSeq, pendingMentions, lastSeq, unread}",
+                    Map.of("type", "object", "note", "无参数")));
+
     private ToolSchemas() {
     }
 }

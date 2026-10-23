@@ -29,10 +29,12 @@ public final class GroupNames {
     public static final String WORLD = "world";
     /** 动态感知（M6）。 */
     public static final String WATCH = "watch";
+    /** 聊天（M12）：注入未读 / 发言 / 检索（不带冒号，限定名由装载器拼）。 */
+    public static final String CHAT = "chat";
 
     /** 冻结的全部组名（顺序=实施顺序无关，仅稳定枚举）。 */
     public static final List<String> ALL = List.of(
-            SENSE, ENTITY, ENTITY_SELF, MOVE, VIEW, INTERACT, ITEM, WORLD, WATCH);
+            SENSE, ENTITY, ENTITY_SELF, MOVE, VIEW, INTERACT, ITEM, WORLD, WATCH, CHAT);
 
     private GroupNames() {
     }
