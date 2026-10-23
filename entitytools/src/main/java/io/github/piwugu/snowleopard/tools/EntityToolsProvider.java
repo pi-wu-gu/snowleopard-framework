@@ -50,8 +50,8 @@ public final class EntityToolsProvider extends ToolGroupProvider.Simple {
                 new EntityToolsProvider(GroupNames.MOVE, "move", "移动（三驱动/寻路/阻塞判定）", ToolSchemas.MOVE_TOOLS),
                 new EntityToolsProvider(GroupNames.VIEW, "view", "视角朝向与锁定", ToolSchemas.VIEW_TOOLS),
                 new EntityToolsProvider(GroupNames.INTERACT, "interact", "交互（攻击/使用/放置/破坏）", ToolSchemas.INTERACT_TOOLS),
-                new EntityToolsProvider(GroupNames.ITEM, "item", "物品（双索引检索/容器/移动）", List.of()),
-                new EntityToolsProvider(GroupNames.WORLD, "world", "世界区域查询（单一工具）", List.of()),
+                new EntityToolsProvider(GroupNames.ITEM, "item", "物品（双索引检索/容器/移动）", ToolSchemas.ITEM_TOOLS),
+                new EntityToolsProvider(GroupNames.WORLD, "world", "世界区域查询（单一工具）", ToolSchemas.WORLD_TOOLS),
                 new EntityToolsProvider(GroupNames.WATCH, "watch", "动态感知（含绑定实体，带控制模型编号）", List.of()));
     }
 

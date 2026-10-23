@@ -43,6 +43,15 @@ public final class ToolSchemas {
     public static final String MOVE_STOP = "stop";
     public static final String MOVE_STATUS = "status";
 
+    // ── item（物品，M5）──
+    public static final String ITEM_SELF_ITEMS = "self_items";
+    public static final String ITEM_CONTAINER_ITEMS = "container_items";
+    public static final String ITEM_MOVE_ITEM = "move_item";
+    public static final String ITEM_DROP = "drop";
+
+    // ── world（世界，M5）──
+    public static final String WORLD_QUERY = "query";
+
     // ── entity_self（自我观测）──
     public static final String SELF_STATUS = "status";
 
@@ -144,6 +153,37 @@ public final class ToolSchemas {
             new ToolRegistry.Tool(MOVE_STATUS, "查询移动状态（位置/速度/进行中/结果）",
                     "move.status() → {x,y,z, speed, mode, outcome, age, distToTarget?}",
                     Map.of("type", "object", "note", "无参数")));
+
+    public static final java.util.List<ToolRegistry.Tool> ITEM_TOOLS = java.util.List.of(
+            new ToolRegistry.Tool(ITEM_SELF_ITEMS, "自身携带物品（含装备栏；双索引：registry+显示名）",
+                    "item.self_items(query?) → {items:[{slot,registry,display,count}]}",
+                    Map.of("type", "object", "query", "可选检索（registry 或显示名子串，忽略大小写）")),
+            new ToolRegistry.Tool(ITEM_CONTAINER_ITEMS, "容器物品（容器寻址三选一；双索引检索）",
+                    "item.container_items(target?, query?) → {items, address}",
+                    Map.of("type", "object",
+                            "target", "\"x,y,z\"|\"self\"；缺省=视线 raycast",
+                            "query", "可选检索")),
+            new ToolRegistry.Tool(ITEM_MOVE_ITEM, "物品移动（容器 slot API；数量拆分/整组）",
+                    "item.move_item(from, to, count?) → {moved}；from/to 如 \"x,y,z:3\"|\"self:mainhand\"",
+                    Map.of("type", "object", "required", java.util.List.of("from", "to"),
+                            "from", "槽位引用", "to", "槽位引用",
+                            "count", "可选数量（缺省=整组）",
+                            "reversible", "true", "state", "changes_world")),
+            new ToolRegistry.Tool(ITEM_DROP, "丢弃物品（从槽位掉落实体）",
+                    "item.drop(from, count?) → {dropped}",
+                    Map.of("type", "object", "required", java.util.List.of("from"),
+                            "from", "槽位引用", "count", "可选数量（缺省=整组）",
+                            "reversible", "false", "state", "changes_world")));
+
+    public static final java.util.List<ToolRegistry.Tool> WORLD_TOOLS = java.util.List.of(
+            new ToolRegistry.Tool(WORLD_QUERY, "区域查询（单一工具：中心|框选 + 检索 + 含实体；双护栏）",
+                    "world.query(center?|box?, radius?, query?, include_entities?, max_chars?) → {blocks, entities, note, truncated?}",
+                    Map.of("type", "object",
+                            "center", "\"x,y,z\"（缺省=自身位置）", "box", "\"x1,y1,z1,x2,y2,z2\" 与 center 二选一",
+                            "radius", "半径（缺省 8）", "query", "可选检索",
+                            "include_entities", "含实体（带 controller 归属标注）",
+                            "max_chars", "返回上限（缺省 4000，截断带标记）",
+                            "护栏", "仅已加载区块（声明在 note）")));
 
     private ToolSchemas() {
     }

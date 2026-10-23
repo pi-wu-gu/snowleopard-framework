@@ -84,6 +84,13 @@ public final class EntityToolsRuntime {
                 }
             }
             return false;
+        }, ref -> {
+            for (Map.Entry<String, EntityToolsModule> e : MODULES.entrySet()) {
+                if (ref.equals(e.getValue().bindings().entityOf(e.getKey()))) {
+                    return e.getKey();
+                }
+            }
+            return "";
         });
     }
 

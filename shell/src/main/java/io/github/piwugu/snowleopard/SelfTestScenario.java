@@ -76,6 +76,7 @@ public final class SelfTestScenario {
 
             ok &= runM2(level, base, z2, ref2);
             ok &= runM3(level, base);
+            ok &= runM5(level, base);
         } catch (Throwable t) {
             ok = false;
             SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST] 场景异常", t);
@@ -488,6 +489,97 @@ public final class SelfTestScenario {
             phase++;
             wait = 0;
         }
+    }
+
+    /** M5：物品（双索引/容器三寻址/slot 移动）+ 世界（两种形状/归属标注/双护栏）。全同步。 */
+    private static boolean runM5(ServerLevel level, BlockPos base) {
+        boolean ok = true;
+        String model = "selftest-m5";
+
+        Zombie z10 = new Zombie(level);
+        z10.moveTo(base.getX() + 0.5, base.getY(), base.getZ() - 14.5, 0, 0);
+        level.addFreshEntity(z10);
+        z10.goalSelector.removeAllGoals(g -> true);
+        z10.targetSelector.removeAllGoals(g -> true);
+        z10.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.STONE, 10));
+        EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
+        Result pick = EntityToolsRuntime.dispatch(model, "entity", "pick",
+                Map.of("target", z10.getUUID().toString()));
+        ok &= step("M5", pick instanceof Result.Ok, "绑定化身 z10", String.valueOf(data(pick)));
+
+        // 双索引：registry 与显示名各命中同一件
+        Result q1 = EntityToolsRuntime.dispatch(model, "item", "self_items",
+                Map.of("query", "minecraft:stone"));
+        Result q2 = EntityToolsRuntime.dispatch(model, "item", "self_items",
+                Map.of("query", "Stone"));
+        ok &= step("M5", String.valueOf(data(q1)).contains("minecraft:stone")
+                        && String.valueOf(data(q2)).contains("minecraft:stone"),
+                "双索引：registry 与显示名命中同一件", "q1=" + data(q1) + " q2=" + data(q2));
+
+        // 容器三寻址
+        BlockPos cp = z10.blockPosition().offset(1, 0, 0);   // 正东贴身——raycast 确定性命中
+        level.setBlockAndUpdate(cp, net.minecraft.world.level.block.Blocks.CHEST.defaultBlockState());
+        net.minecraft.world.Container chest =
+                (net.minecraft.world.Container) level.getBlockEntity(cp);
+        chest.setItem(0, new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIRT, 10));
+        Result c1 = EntityToolsRuntime.dispatch(model, "item", "container_items",
+                Map.of("target", cp.getX() + "," + cp.getY() + "," + cp.getZ()));
+        ok &= step("M5", String.valueOf(data(c1)).contains("minecraft:dirt"),
+                "容器寻址①：坐标命中", String.valueOf(data(c1)));
+        Result c2 = EntityToolsRuntime.dispatch(model, "item", "container_items",
+                Map.of("target", "self"));
+        ok &= step("M5", String.valueOf(data(c2)).contains("self:mainhand"),
+                "容器寻址②：自身命中", String.valueOf(data(c2)));
+        FacingMath.Angle aim = FacingMath.aim(z10.getX(), z10.getY() + z10.getEyeHeight(), z10.getZ(),
+                cp.getX() + 0.5, cp.getY() + 0.5, cp.getZ() + 0.5);
+        EntityToolsRuntime.dispatch(model, "view", "look",
+                Map.of("yaw", aim.yaw(), "pitch", aim.pitch()));   // 走产品路径（头/身同步）
+        Result c3 = EntityToolsRuntime.dispatch(model, "item", "container_items", Map.of());
+        ok &= step("M5", String.valueOf(data(c3)).contains("raycast:")
+                        && String.valueOf(data(c3)).contains("minecraft:dirt"),
+                "容器寻址③：视线 raycast 命中",
+                "aim=" + aim + " rot=" + z10.getYRot() + "/" + z10.getXRot()
+                        + " pos=" + z10.position() + " eye=" + z10.getEyePosition(1.0f)
+                        + " view=" + z10.getViewVector(1.0f) + " cp=" + cp + " → " + data(c3));
+
+        // slot 移动：拆分数量精确 + 服务端槽位核实
+        Result mv = EntityToolsRuntime.dispatch(model, "item", "move_item",
+                Map.of("from", cp.getX() + "," + cp.getY() + "," + cp.getZ() + ":0",
+                        "to", "self:offhand", "count", 3));
+        ok &= step("M5", mv instanceof Result.Ok
+                        && String.valueOf(data(mv)).contains("fromRemaining=7")
+                        && String.valueOf(data(mv)).contains("toCount=3"),
+                "move_item 拆分精确（10→7+3）", String.valueOf(data(mv)));
+
+        // 丢弃：槽位减少（服务端事实）
+        Result dp = EntityToolsRuntime.dispatch(model, "item", "drop",
+                Map.of("from", "self:mainhand", "count", 2));
+        ok &= step("M5", dp instanceof Result.Ok
+                        && String.valueOf(data(dp)).contains("fromRemaining=8"),
+                "drop 槽位核实（10→8）", String.valueOf(data(dp)));
+
+        // 世界查询①：中心+半径+含实体（归属标注：z2 仍绑定 selftest-m2；半径要罩住 15 格外的 z2）
+        Result w1 = EntityToolsRuntime.dispatch(model, "world", "query",
+                Map.of("radius", 20, "include_entities", true));
+        ok &= step("M5", w1 instanceof Result.Ok
+                        && String.valueOf(data(w1)).contains("controller=selftest-m2")
+                        && String.valueOf(data(w1)).contains("仅已加载区块"),
+                "world.query 中心形状（实体带 controller 归属 + 已加载声明）", String.valueOf(data(w1)));
+
+        // 世界查询②：框选命中箱子
+        Result w2 = EntityToolsRuntime.dispatch(model, "world", "query",
+                Map.of("box", (cp.getX()) + "," + (cp.getY()) + "," + (cp.getZ()) + ","
+                        + (cp.getX() + 1) + "," + (cp.getY() + 1) + "," + (cp.getZ() + 1)));
+        ok &= step("M5", String.valueOf(data(w2)).contains("minecraft:chest"),
+                "world.query 框选形状命中箱子", String.valueOf(data(w2)));
+
+        // 双护栏：超量截断标记
+        Result w3 = EntityToolsRuntime.dispatch(model, "world", "query",
+                Map.of("radius", 30, "include_entities", true, "max_chars", 100));
+        ok &= step("M5", String.valueOf(data(w3)).contains("truncated=true"),
+                "返回量上限截断标记", "truncated in " + String.valueOf(data(w3)).substring(0, 80));
+        return ok;
     }
 
     private static Object data(Result r) {

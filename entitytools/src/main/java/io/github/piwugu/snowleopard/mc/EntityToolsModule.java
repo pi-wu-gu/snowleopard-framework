@@ -12,6 +12,7 @@ import net.minecraft.world.entity.player.Player;
 import io.github.piwugu.snowleopard.tools.BindingRegistry;
 import io.github.piwugu.snowleopard.tools.CandidateInfo;
 import io.github.piwugu.snowleopard.tools.FacingMath;
+import io.github.piwugu.snowleopard.tools.ItemIndex;
 import io.github.piwugu.snowleopard.tools.LookLockMachine;
 import io.github.piwugu.snowleopard.tools.SenseMachine;
 import io.github.piwugu.snowleopard.tools.SenseState;
@@ -75,9 +76,11 @@ public final class EntityToolsModule {
     /**
      * 工具调度：按（组, 工具）二维分发——三组都有 "status"，只按工具名分发会撞车（M1 编译教训）。
      * 工具名来自 {@link ToolSchemas} 单点冻结——注册表元数据与调度同源。
+     * excludeRefs=其他模型已绑定实体；controllerOf=实体→控制模型编号（动态/世界查询归属标注）。
      */
     public Result call(String group, String tool, Map<String, Object> params,
-                       java.util.function.Predicate<String> excludeRefs) {
+                       java.util.function.Predicate<String> excludeRefs,
+                       java.util.function.Function<String, String> controllerOf) {
         if (params == null) {
             params = Map.of();
         }
@@ -122,6 +125,17 @@ public final class EntityToolsModule {
                     case ToolSchemas.MOVE_STOP -> stopMove();
                     case ToolSchemas.MOVE_STATUS -> moveStatus();
                     default -> Result.error("move 组无此工具: " + tool);
+                };
+                case io.github.piwugu.snowleopard.tools.GroupNames.ITEM -> switch (tool) {
+                    case ToolSchemas.ITEM_SELF_ITEMS -> selfItems(params);
+                    case ToolSchemas.ITEM_CONTAINER_ITEMS -> containerItems(params);
+                    case ToolSchemas.ITEM_MOVE_ITEM -> moveItem(params);
+                    case ToolSchemas.ITEM_DROP -> dropItem(params);
+                    default -> Result.error("item 组无此工具: " + tool);
+                };
+                case io.github.piwugu.snowleopard.tools.GroupNames.WORLD -> switch (tool) {
+                    case ToolSchemas.WORLD_QUERY -> worldQuery(params, controllerOf);
+                    default -> Result.error("world 组无此工具: " + tool);
                 };
                 default -> Result.error("工具组未实现或未知: " + group + "（M2–M6 逐步开放）");
             };
@@ -265,6 +279,14 @@ public final class EntityToolsModule {
 
     // ── view（M2）──
 
+    /** 转向（度）——头/身/眼同步：pick 与外部观察用头向，只 setYRot 会"身转头不转"（M5 真机逮到）。 */
+    private static void setRotation(LivingEntity self, double yaw, double pitch) {
+        self.setYRot((float) yaw);
+        self.setXRot((float) pitch);
+        self.setYHeadRot((float) yaw);
+        self.yBodyRot = (float) yaw;
+    }
+
     Result look(Map<String, Object> params) {
         LivingEntity self = requireBound();
         if (self == null) {
@@ -277,8 +299,7 @@ public final class EntityToolsModule {
         }
         float yaw = yn.floatValue();
         float pitch = pn.floatValue();
-        self.setYRot(yaw);
-        self.setXRot(pitch);
+        setRotation(self, yaw, pitch);
         lastSetYaw = yaw;
         lastSetPitch = pitch;
         return Result.ok(Map.of("yaw", (double) yaw, "pitch", (double) pitch));
@@ -384,8 +405,7 @@ public final class EntityToolsModule {
         Result r = lookLock.tick(targetPresent, distance, drifted);
         if (r instanceof Result.Ok ok && ok.data() instanceof Map<?, ?> m
                 && Boolean.TRUE.equals(m.get("locked"))) {
-            self.setYRot((float) aim.yaw());
-            self.setXRot((float) aim.pitch());
+            setRotation(self, aim.yaw(), aim.pitch());
             lastSetYaw = (float) aim.yaw();
             lastSetPitch = (float) aim.pitch();
         }
@@ -584,8 +604,7 @@ public final class EntityToolsModule {
         }
         FacingMath.Angle a = FacingMath.aim(
                 self.getX(), self.getY() + self.getEyeHeight(), self.getZ(), x, y, z);
-        self.setYRot((float) a.yaw());
-        self.setXRot((float) a.pitch());
+        setRotation(self, a.yaw(), a.pitch());
         lastSetYaw = (float) a.yaw();
         lastSetPitch = (float) a.pitch();
     }
@@ -760,6 +779,324 @@ public final class EntityToolsModule {
         lastMoveY = self.getY();
         lastMoveZ = self.getZ();
         movePrimed = true;
+    }
+
+    // ── item / world（M5）──
+
+    /** 可选检索串：缺省/"null"/空白 → null（=不过滤）。String.valueOf(null)="null" 的坑。 */
+    private static String optQuery(Map<String, Object> params) {
+        Object q = params.get("query");
+        String s = String.valueOf(q);
+        return (q == null || s.isBlank() || "null".equals(s)) ? null : s;
+    }
+
+    /** 槽位引用：{@code x,y,z:槽号}（容器）或 {@code self:mainhand|offhand|head|chest|legs|feet}。 */
+    private record SlotRef(boolean self, net.minecraft.core.BlockPos pos, int slot,
+                           net.minecraft.world.entity.EquipmentSlot equip) {
+    }
+
+    private static SlotRef parseSlot(String ref) {
+        if (ref == null || ref.isBlank()) {
+            throw new IllegalArgumentException("槽位引用形如 \"x,y,z:3\" 或 \"self:mainhand\"");
+        }
+        if (ref.startsWith("self:")) {
+            String e = ref.substring("self:".length()).toLowerCase(java.util.Locale.ROOT);
+            return switch (e) {
+                case "mainhand" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.MAINHAND);
+                case "offhand" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.OFFHAND);
+                case "head" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.HEAD);
+                case "chest" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.CHEST);
+                case "legs" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.LEGS);
+                case "feet" -> new SlotRef(true, null, -1, net.minecraft.world.entity.EquipmentSlot.FEET);
+                default -> throw new IllegalArgumentException("未知装备槽: " + e);
+            };
+        }
+        int i = ref.lastIndexOf(':');
+        if (i < 0) {
+            throw new IllegalArgumentException("容器槽位引用形如 \"x,y,z:3\"");
+        }
+        return new SlotRef(false, parseBlock(ref.substring(0, i)),
+                Integer.parseInt(ref.substring(i + 1).trim()), null);
+    }
+
+    private net.minecraft.world.item.ItemStack stackAt(LivingEntity self, ServerLevel level, SlotRef ref) {
+        return ref.self() ? self.getItemBySlot(ref.equip())
+                : containerAt(level, ref.pos()).getItem(ref.slot());
+    }
+
+    private void setStackAt(LivingEntity self, ServerLevel level, SlotRef ref,
+                            net.minecraft.world.item.ItemStack stack) {
+        if (ref.self()) {
+            self.setItemSlot(ref.equip(), stack);
+        } else {
+            containerAt(level, ref.pos()).setItem(ref.slot(), stack);
+        }
+    }
+
+    private net.minecraft.world.Container containerAt(ServerLevel level, net.minecraft.core.BlockPos pos) {
+        if (!level.isLoaded(pos)) {
+            throw new IllegalArgumentException("目标区块未加载: " + pos);
+        }
+        if (level.getBlockEntity(pos) instanceof net.minecraft.world.Container c) {
+            return c;
+        }
+        throw new IllegalArgumentException("目标不是容器: " + pos);
+    }
+
+    private static java.util.List<ItemIndex.Entry> entriesOf(
+            java.util.List<java.util.AbstractMap.SimpleEntry<String, net.minecraft.world.item.ItemStack>> stacks) {
+        java.util.List<ItemIndex.Entry> out = new java.util.ArrayList<>();
+        for (var e : stacks) {
+            net.minecraft.world.item.ItemStack s = e.getValue();
+            if (s.isEmpty()) {
+                continue;
+            }
+            out.add(new ItemIndex.Entry(e.getKey(),
+                    net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(s.getItem()).toString(),
+                    s.getHoverName().getString(), s.getCount()));
+        }
+        return out;
+    }
+
+    private static ItemIndex.Entry entryOf(String slot, net.minecraft.world.item.ItemStack s) {
+        return new ItemIndex.Entry(slot,
+                net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(s.getItem()).toString(),
+                s.getHoverName().getString(), s.getCount());
+    }
+
+    Result selfItems(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        java.util.List<java.util.AbstractMap.SimpleEntry<String, net.minecraft.world.item.ItemStack>> stacks =
+                new java.util.ArrayList<>();
+        stacks.add(new java.util.AbstractMap.SimpleEntry<>("self:mainhand", self.getMainHandItem()));
+        stacks.add(new java.util.AbstractMap.SimpleEntry<>("self:offhand", self.getOffhandItem()));
+        for (var slot : new net.minecraft.world.entity.EquipmentSlot[]{
+                net.minecraft.world.entity.EquipmentSlot.HEAD, net.minecraft.world.entity.EquipmentSlot.CHEST,
+                net.minecraft.world.entity.EquipmentSlot.LEGS, net.minecraft.world.entity.EquipmentSlot.FEET}) {
+            stacks.add(new java.util.AbstractMap.SimpleEntry<>("self:" + slot.getName(), self.getItemBySlot(slot)));
+        }
+        ItemIndex index = new ItemIndex(entriesOf(stacks));
+        List<ItemIndex.Entry> hits = index.search(optQuery(params));
+        java.util.List<Map<String, Object>> items = new java.util.ArrayList<>();
+        for (ItemIndex.Entry e : hits) {
+            items.add(Map.of("slot", e.slot(), "registry", e.registry(),
+                    "display", e.display(), "count", e.count()));
+        }
+        return Result.ok(Map.of("items", items));
+    }
+
+    Result containerItems(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        ServerLevel level = ctx.level();
+        String target = String.valueOf(params.get("target"));
+        String address;
+        java.util.List<java.util.AbstractMap.SimpleEntry<String, net.minecraft.world.item.ItemStack>> stacks =
+                new java.util.ArrayList<>();
+        if ("self".equals(target)) {
+            address = "self";
+            stacks.add(new java.util.AbstractMap.SimpleEntry<>("self:mainhand", self.getMainHandItem()));
+        } else if (target != null && !target.isBlank() && !"null".equals(target)) {
+            net.minecraft.core.BlockPos pos = parseBlock(target);
+            address = "coord:" + pos;
+            net.minecraft.world.Container c = containerAt(level, pos);
+            for (int i = 0; i < c.getContainerSize(); i++) {
+                stacks.add(new java.util.AbstractMap.SimpleEntry<>(String.valueOf(i), c.getItem(i)));
+            }
+        } else {
+            var hit = self.pick(8.0, 1.0f, false);
+            if (!(hit instanceof net.minecraft.world.phys.BlockHitResult bh)
+                    || bh.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) {
+                return Result.error("视线内无容器——请显式给 target（pick 实际: " + hit
+                        + " 眼位 " + self.getEyePosition(1.0f) + " 朝向 " + self.getViewVector(1.0f) + "）");
+            }
+            address = "raycast:" + bh.getBlockPos();
+            net.minecraft.world.Container c = containerAt(level, bh.getBlockPos());
+            for (int i = 0; i < c.getContainerSize(); i++) {
+                stacks.add(new java.util.AbstractMap.SimpleEntry<>(String.valueOf(i), c.getItem(i)));
+            }
+        }
+        ItemIndex index = new ItemIndex(entriesOf(stacks));
+        java.util.List<Map<String, Object>> items = new java.util.ArrayList<>();
+        for (ItemIndex.Entry e : index.search(optQuery(params))) {
+            items.add(Map.of("slot", e.slot(), "registry", e.registry(),
+                    "display", e.display(), "count", e.count()));
+        }
+        return Result.ok(Map.of("items", items, "address", address));
+    }
+
+    Result moveItem(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        ServerLevel level = ctx.level();
+        SlotRef from = parseSlot(String.valueOf(params.get("from")));
+        SlotRef to = parseSlot(String.valueOf(params.get("to")));
+        net.minecraft.world.item.ItemStack src = stackAt(self, level, from);
+        if (src.isEmpty()) {
+            return Result.error("来源槽为空: " + params.get("from"));
+        }
+        int want = params.get("count") instanceof Number n ? n.intValue() : src.getCount();
+        want = Math.min(want, src.getCount());
+        if (want <= 0) {
+            return Result.error("移动数量非法");
+        }
+        net.minecraft.world.item.ItemStack moved = src.copy();
+        moved.setCount(want);
+        src.shrink(want);                       // 拆分
+        setStackAt(self, level, from, src);
+        net.minecraft.world.item.ItemStack dst = stackAt(self, level, to);
+        if (dst.isEmpty()) {
+            setStackAt(self, level, to, moved);
+        } else if (net.minecraft.world.item.ItemStack.isSameItemSameComponents(dst, moved)) {
+            dst.grow(want);
+            setStackAt(self, level, to, dst);
+        } else {
+            src.grow(want);                     // 目标异物——回滚
+            setStackAt(self, level, from, src);
+            return Result.error("目标槽有异物——已回滚");
+        }
+        // 服务端槽位核实
+        int afterFrom = stackAt(self, level, from).getCount();
+        int afterTo = stackAt(self, level, to).getCount();
+        return Result.ok(Map.of("moved", want, "fromRemaining", afterFrom, "toCount", afterTo));
+    }
+
+    Result dropItem(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        ServerLevel level = ctx.level();
+        SlotRef from = parseSlot(String.valueOf(params.get("from")));
+        net.minecraft.world.item.ItemStack src = stackAt(self, level, from);
+        if (src.isEmpty()) {
+            return Result.error("来源槽为空: " + params.get("from"));
+        }
+        int want = params.get("count") instanceof Number n ? n.intValue() : src.getCount();
+        want = Math.min(want, src.getCount());
+        net.minecraft.world.item.ItemStack dropped = src.copy();
+        dropped.setCount(want);
+        src.shrink(want);
+        setStackAt(self, level, from, src);
+        self.spawnAtLocation(dropped, 0);
+        int after = stackAt(self, level, from).getCount();
+        return Result.ok(Map.of("dropped", want, "fromRemaining", after));
+    }
+
+    /**
+     * 区域查询（单一工具，中心|框选）。双护栏：仅已加载区块（note 声明）+ 返回量上限（截断标记）。
+     * 含实体时带 controller 归属标注（裁决 §1.4）。
+     */
+    Result worldQuery(Map<String, Object> params,
+                      java.util.function.Function<String, String> controllerOf) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        ServerLevel level = ctx.level();
+        if (level == null) {
+            return Result.error("世界未就绪");
+        }
+        String box = params.get("box") == null ? "" : String.valueOf(params.get("box"));
+        net.minecraft.world.phys.AABB area;
+        if (!box.isBlank() && !"null".equals(box)) {
+            String[] p = box.split(",");
+            if (p.length != 6) {
+                return Result.error("box 形如 \"x1,y1,z1,x2,y2,z2\"");
+            }
+            double x1 = Double.parseDouble(p[0]), y1 = Double.parseDouble(p[1]), z1 = Double.parseDouble(p[2]);
+            double x2 = Double.parseDouble(p[3]), y2 = Double.parseDouble(p[4]), z2 = Double.parseDouble(p[5]);
+            area = new net.minecraft.world.phys.AABB(x1, y1, z1, x2, y2, z2);
+        } else {
+            double cx = self.getX(), cy = self.getY(), cz = self.getZ();
+            Object c = params.get("center");
+            if (c != null && !String.valueOf(c).isBlank() && !"null".equals(c)) {
+                net.minecraft.core.BlockPos pos = parseBlock(String.valueOf(c));
+                cx = pos.getX() + 0.5;
+                cy = pos.getY() + 0.5;
+                cz = pos.getZ() + 0.5;
+            }
+            double r = params.get("radius") instanceof Number n ? n.doubleValue() : 8.0;
+            area = new net.minecraft.world.phys.AABB(cx, cy, cz, cx, cy, cz).inflate(r);
+        }
+        String query = String.valueOf(params.get("query"));
+        boolean withEntities = Boolean.parseBoolean(String.valueOf(params.get("include_entities")));
+        int maxChars = params.get("max_chars") instanceof Number n ? n.intValue() : 4000;
+
+        java.util.List<Map<String, Object>> blocks = new java.util.ArrayList<>();
+        int totalBlocks = 0;
+        int unloadedSkipped = 0;
+        java.util.Set<Long> unloadedChunks = new java.util.HashSet<>();
+        int cap = 64;
+        for (net.minecraft.core.BlockPos pos : net.minecraft.core.BlockPos.betweenClosed(
+                net.minecraft.core.BlockPos.containing(area.minX, area.minY, area.minZ),
+                net.minecraft.core.BlockPos.containing(area.maxX, area.maxY, area.maxZ))) {
+            if (!level.isLoaded(pos)) {
+                unloadedChunks.add(net.minecraft.world.level.ChunkPos.asLong(pos));
+                continue;
+            }
+            var state = level.getBlockState(pos);
+            if (state.isAir()) {
+                continue;
+            }
+            String registry = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+            String display = state.getBlock().getName().getString();
+            if (!query.isBlank() && !"null".equals(query)
+                    && !registry.toLowerCase(java.util.Locale.ROOT).contains(query.toLowerCase(java.util.Locale.ROOT))
+                    && !display.toLowerCase(java.util.Locale.ROOT).contains(query.toLowerCase(java.util.Locale.ROOT))) {
+                continue;
+            }
+            totalBlocks++;
+            if (blocks.size() < cap) {
+                blocks.add(Map.of("x", pos.getX(), "y", pos.getY(), "z", pos.getZ(),
+                        "registry", registry, "display", display));
+            }
+        }
+        unloadedSkipped = unloadedChunks.size();
+
+        java.util.List<Map<String, Object>> entities = new java.util.ArrayList<>();
+        int totalEntities = 0;
+        if (withEntities) {
+            for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, area)) {
+                if (e == self) {
+                    continue;
+                }
+                String ref = e.getUUID().toString();
+                totalEntities++;
+                if (entities.size() < cap) {
+                    String controller = controllerOf == null ? "" : String.valueOf(controllerOf.apply(ref));
+                    entities.add(Map.of("ref", ref,
+                            "type", net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).toString(),
+                            "name", e.getName().getString(),
+                            "x", e.getX(), "y", e.getY(), "z", e.getZ(),
+                            "controller", controller));
+                }
+            }
+        }
+
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("blocks", blocks);
+        out.put("blocksTotal", totalBlocks);
+        if (withEntities) {
+            out.put("entities", entities);
+            out.put("entitiesTotal", totalEntities);
+        }
+        out.put("note", "仅已加载区块（" + unloadedSkipped + " 个未加载区块已跳过）");
+        String rendered = String.valueOf(out);
+        if (rendered.length() > maxChars) {
+            out.put("truncated", true);
+            out.put("note", out.get("note") + "；返回超 " + maxChars + " 字符已截断（调 max_chars 放开）");
+        } else {
+            out.put("truncated", false);
+        }
+        return Result.ok(out);
     }
 
     // ── 死亡流（壳侧事件钩子调用）──
