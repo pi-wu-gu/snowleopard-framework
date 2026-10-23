@@ -69,7 +69,8 @@ public final class PlayerTestArea {
                 int y = ((Number) Json.parseObject(Files.readString(record, StandardCharsets.UTF_8))
                         .get("floorY")).intValue();
                 if (isBlock(level, BASE_X + 8, y, BASE_Z + 8, Blocks.SMOOTH_STONE)
-                        && isBlock(level, BASE_X + 24, y, BASE_Z + 8, Blocks.QUARTZ_BLOCK)) {
+                        && isBlock(level, BASE_X + 24, y, BASE_Z + 8, Blocks.QUARTZ_BLOCK)
+                        && isBlock(level, BASE_X + 12, y - 1, BASE_Z + 12, Blocks.BEDROCK)) {
                     floorY = y;
                     SnowLeopardMod.LOG.info("[雪豹框架][测试区] 已存在，跳过（地板 y={}）", y);
                     return;
@@ -105,7 +106,8 @@ public final class PlayerTestArea {
                 int z = BASE_Z + dz;
                 Block floor = floorMaterial(x, z);
                 set(level, x, y, z, floor);            // 地板（按区块棋盘格）
-                set(level, x, y - 1, z, floor);        // 双层，防漏光防塌
+                set(level, x, y - 1, z, Blocks.BEDROCK);   // **垫基岩**（用户 2026-10-24 04:22 要求：
+                set(level, x, y - 2, z, Blocks.BEDROCK);   // 该处地表下是虚空，掉下去就是虚空伤害）
                 boolean edge = dx == 0 || dz == 0 || dx == SIZE - 1 || dz == SIZE - 1;
                 for (int h = 1; h <= INNER_TOP; h++) {
                     set(level, x, y + h, z, Blocks.AIR);   // 先清室内（含墙位置）

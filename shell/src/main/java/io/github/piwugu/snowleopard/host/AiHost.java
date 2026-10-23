@@ -270,8 +270,10 @@ public final class AiHost {
         for (ToolRegistry.Group g : core.registry().groups()) {
             String shortGroup = g.full().substring(g.full().lastIndexOf(':') + 1);
             for (ToolRegistry.Tool t : g.tools()) {
+                // 前缀用下划线：OpenAI 兼容端点的 function.name 只允许 [a-zA-Z0-9_-]
+                // （点号会被 DeepSeek/MiMo 400 "does not match pattern"——2026-10-24 04:30 踩过）
                 String exposed = counts.getOrDefault(t.name(), 0) > 1
-                        ? shortGroup + "." + t.name() : t.name();
+                        ? shortGroup + "_" + t.name() : t.name();
                 Entry prev = TOOLS.putIfAbsent(exposed, new Entry(shortGroup, t));
                 if (prev != null) {
                     SnowLeopardMod.LOG.warn("[雪豹框架][host] 暴露名仍冲突 {}（{} 与 {}），后者不进清单",
@@ -287,7 +289,11 @@ public final class AiHost {
     private static List<Map<String, Object>> toolSchemas(SnowLeopard core) {
         buildToolIndex(core);
         List<Map<String, Object>> out = new ArrayList<>();
-        for (Entry e : TOOLS.values()) {
+        // **function.name 必须用暴露名（含组前缀）**——用原始注册名会让四个 status 同名，
+        // DeepSeek/MiMo 直接 400 "Tool names must be unique"（2026-10-24 04:02–04:21 踩过：
+        // 故障转移兜到 stepfun，优先级第 1 的 DeepSeek 整整一轮没真正服务过）
+        for (Map.Entry<String, Entry> ee : TOOLS.entrySet()) {
+            Entry e = ee.getValue();
             Map<String, Object> props = new LinkedHashMap<>();
             List<Object> required = new ArrayList<>();
             for (Map.Entry<String, Object> pe : e.tool().params().entrySet()) {
@@ -308,7 +314,7 @@ public final class AiHost {
                 parameters.put("required", required);
             }
             out.add(Map.of("type", "function", "function", Map.of(
-                    "name", e.tool().name(),
+                    "name", ee.getKey(),
                     "description", e.tool().summary() == null ? e.tool().usage()
                             : e.tool().summary() + "（" + e.tool().usage() + "）",
                     "parameters", parameters)));
