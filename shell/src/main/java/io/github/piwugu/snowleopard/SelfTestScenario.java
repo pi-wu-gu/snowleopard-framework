@@ -94,6 +94,7 @@ public final class SelfTestScenario {
             ok &= runM7(level, rooms[6]);
             ok &= runM9();   // 内置四组走壳侧统一入口（文件能力，不需要房间）
             ok &= runM10();  // 协作面：唤醒 + 群组（同样不需要房间）
+            ok &= runM11(level, rooms[7]);   // 聊天栏推送 + 中立生物绑定（借 M8 房，用完即杀）
         } catch (Throwable t) {
             ok = false;
             SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST] 场景异常", t);
@@ -1416,6 +1417,102 @@ public final class SelfTestScenario {
         } catch (java.io.IOException ignored) {
             // 同上
         }
+    }
+
+
+    /**
+     * M11：聊天栏推送（2026-10-23 22:25 (UTC+8)，分析 §八）。
+     *
+     * <p>先"随意绑定一个中立生物"（僵尸猪灵：受击才反击）验证绑定链在非敌对生物上一样通，
+     * 再把 {@code TurnSummary} 那一行推给聊天栏——**内容同源、只推摘要、送达有返回值**。
+     *
+     * <p>为什么用 M8 的房间：同步段时它还是空的（M8 在 tick 驱动器里才跑），
+     * 用完把猪灵打死，M8 的环境不受影响。
+     */
+    private static boolean runM11(ServerLevel level, BlockPos base) {
+        boolean ok = true;
+        String model = "selftest-m11";
+        EntityToolsRuntime.setScanAnchor(model, base);
+
+        // 清场 + 重建家（与 M10 同一教训：清完必须建，否则"未登记"）
+        java.nio.file.Path home = BuiltinRuntime.home(model);
+        if (home != null) {
+            deleteTree(home);
+            BuiltinRuntime.forget(model);
+            try {
+                java.nio.file.Files.createDirectories(BuiltinRuntime.home(model));
+            } catch (java.io.IOException e) {
+                return step("M11", false, "重建测试 ID 的家", String.valueOf(e));
+            }
+        }
+
+        // ① 中立生物：僵尸猪灵（受击才反击）
+        net.minecraft.world.entity.monster.ZombifiedPiglin pig =
+                new net.minecraft.world.entity.monster.ZombifiedPiglin(
+                        net.minecraft.world.entity.EntityType.ZOMBIFIED_PIGLIN, level);
+        pig.setPersistenceRequired();   // 固定装置：禁止远距静默 discard
+        pig.moveTo(base.getX() + 0.5, base.getY(), base.getZ() + 0.5, 0, 0);
+        level.addFreshEntity(pig);
+        String ref = pig.getUUID().toString();
+
+        Result open = EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
+        ok &= step("M11", open instanceof Result.Ok && String.valueOf(data(open)).contains(ref),
+                "中立生物进候选（僵尸猪灵）", String.valueOf(data(open)));
+        Result pick = EntityToolsRuntime.dispatch(model, "entity", "pick", Map.of("target", ref));
+        ok &= step("M11", pick instanceof Result.Ok, "绑定中立生物 → Ok", String.valueOf(pick));
+        Result self = EntityToolsRuntime.dispatch(model, "entity_self", "status", Map.of());
+        // entity_self.status 不带实体类型（那是 sense 候选三件套的职责），它报的是"我绑的是谁"
+        ok &= step("M11", self instanceof Result.Ok
+                        && String.valueOf(data(self)).contains(ref),
+                "entity_self 指向绑定的中立生物", String.valueOf(data(self)));
+        ok &= step("M11", pig.getTarget() == null, "中立旁证：未受击不锁定目标",
+                "target=" + pig.getTarget());
+
+        // ② 制造一条带正文的群消息 → 汇总行只该有计数，不该有正文
+        Result g = EntityToolsRuntime.dispatch(model, "group", "group_create", Map.of("name", "M11组"));
+        String gid = String.valueOf(data(g)).replaceAll(".*gid=([^,}]+).*", "$1");
+        EntityToolsRuntime.dispatch(model, "group", "group_send",
+                Map.of("gid", gid, "text", "秘密正文XYZ"));
+        String line = WakeBridge.turnLine(model);
+        ok &= step("M11", line != null && line.contains("群组未读"),
+                "汇总行含群未读", String.valueOf(line));
+        ok &= step("M11", line != null && !line.contains("秘密正文XYZ"),
+                "汇总行不含正文（只推计数）", String.valueOf(line));
+
+        // ③ 推送到聊天栏（注入 sink：专用服务器没有客户端，断言内容而非"看见"）
+        java.util.List<String> recorded = new java.util.ArrayList<>();
+        ChatPush.setSink(recorded::add);
+        boolean sent = ChatPush.push(line);
+        ok &= step("M11", sent && recorded.size() == 1 && recorded.get(0).equals(line),
+                "推送送达且内容与汇总行同源", recorded.toString());
+        ok &= step("M11", recorded.get(0).length() <= ChatPush.MAX_CHARS,
+                "单条不超过 " + ChatPush.MAX_CHARS + " 字符", "len=" + recorded.get(0).length());
+
+        // ④ 去重：同内容 5 秒内再推 → 不送达
+        boolean again = ChatPush.push(line);
+        ok &= step("M11", !again && recorded.size() == 1,
+                "同内容 5 秒内去重（只送达一次）", "again=" + again + " size=" + recorded.size());
+
+        // ⑤ 限流：每分钟 20 条（用 21 条不同内容压上去）
+        int delivered = 0;
+        for (int i = 0; i < 21; i++) {
+            if (ChatPush.push("M11 限流压测 #" + i)) {
+                delivered++;
+            }
+        }
+        ok &= step("M11", delivered <= ChatPush.MAX_PER_MINUTE - 1,
+                "每分钟上限生效（≤19 条新内容送达）", "delivered=" + delivered);
+
+        // ⑥ 无 sink 且无在线玩家 → 如实返回 false（不谎报送达）
+        ChatPush.setSink(null);
+        boolean noPlayer = ChatPush.push("M11 无玩家时的推送");
+        ok &= step("M11", !noPlayer, "无玩家/无 sink → false（不假装已推送）", "sent=" + noPlayer);
+
+        // ⑦ 收尾：杀掉中立生物（让 M8 的环境保持干净）+ 解散群
+        pig.hurt(level.damageSources().generic(), 1000f);
+        EntityToolsRuntime.dispatch(model, "group", "group_disband", Map.of("gid", gid));
+        ok &= step("M11", !pig.isAlive(), "用完即杀（不污染后续 M8 房间）", "alive=" + pig.isAlive());
+        return ok;
     }
 
     private static Object data(Result r) {
