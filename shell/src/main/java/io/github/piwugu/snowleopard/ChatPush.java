@@ -113,6 +113,25 @@ public final class ChatPush {
         return true;
     }
 
+    /**
+     * 定点发送给触发人（M13 反馈回路：右键/点名后玩家必须看到回执，不能只落服务端日志）。
+     *
+     * <p>不走去重（"冷却中"这类回执内容相同但都是新事件）、不占摘要推送的每分钟配额——
+     * 它的天然节流是唤醒冷却本身（每载体 10 秒一次 + 冷却回执每窗口一次）。
+     *
+     * @return true=送达；false=玩家为 null 或已离线（如实返回，不假装）
+     */
+    public static boolean pushTo(ServerPlayer player, String line) {
+        if (player == null || line == null || line.isBlank()) {
+            return false;
+        }
+        if (player instanceof FakePlayer) {
+            return false;   // 假人能收包没客户端：与 push 的默认通道同一条防线
+        }
+        player.displayClientMessage(Component.literal("[雪豹] " + truncate(line.trim())), false);
+        return true;
+    }
+
     private static void markSent(String text, long now) {
         LAST_SENT.put(text, now);
         windowCount++;

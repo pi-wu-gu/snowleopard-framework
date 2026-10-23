@@ -55,6 +55,8 @@ public final class AvatarWake {
     private static boolean onDamage = true;
     private static long cooldownMs = DEFAULT_COOLDOWN_MS;
     private static final Map<String, Long> LAST_WAKE = new ConcurrentHashMap<>();
+    /** 冷却回执每窗口只发一次（连点右键不能刷屏，但第一次必须让人知道为什么没反应）。 */
+    private static final Map<String, Long> LAST_COOLDOWN_NOTE = new ConcurrentHashMap<>();
     private static int tickCounter;
 
     private AvatarWake() {
@@ -127,7 +129,8 @@ public final class AvatarWake {
         wakeFromPlayer("ext-player-" + safe(player.getGameProfile().getName()), avatar,
                 "interact:right_click",
                 "玩家 " + player.getGameProfile().getName() + " 用" + handName
-                        + "右键了你（" + item + "，位置 " + pos(player) + "）");
+                        + "右键了你（" + item + "，位置 " + pos(player) + "）",
+                player);
     }
 
     /** 被打 → 唤醒（裁决 1：**可配置**，默认开；关掉后这里直接跳过）。 */
@@ -145,7 +148,8 @@ public final class AvatarWake {
                         : attackerEntity.getType().toShortString());
         wakeFromPlayer("ext-player-" + safe(who), avatar, "interact:attacked",
                 "你被攻击了：来源 " + who + "（伤害约 "
-                        + String.format(Locale.ROOT, "%.1f", event.getContainer().getNewDamage()) + "）");
+                        + String.format(Locale.ROOT, "%.1f", event.getContainer().getNewDamage()) + "）",
+                attackerEntity instanceof ServerPlayer sp ? sp : null);
     }
 
     /** 清冷却（自测/运维用）：跨测试段时冷却会把下一段的唤醒吞掉。 */
@@ -165,18 +169,29 @@ public final class AvatarWake {
         }
     }
 
-    private static void wakeFromPlayer(String from, AvatarEntity avatar, String reason, String prompt) {
+    private static void wakeFromPlayer(String from, AvatarEntity avatar, String reason,
+                                       String prompt, ServerPlayer feedbackTo) {
         AvatarStore.Entry entry = entryOf(avatar);
         if (entry == null) {
             return;   // 没登记的载体：只是只猫，不接唤醒
         }
+        String name = displayName(entry);
         long now = System.currentTimeMillis();
         Long last = LAST_WAKE.get(avatar.getStringUUID());
         if (last != null && now - last < cooldownMs) {
-            return;   // 冷却（分析 §3.1：连点右键/连击等于每秒一次）
+            // 冷却：第一次拒绝必须让人看见（否则玩家以为功能坏了），同一窗口内不重复刷
+            long window = last / Math.max(1, cooldownMs);
+            if (feedbackTo != null
+                    && !Long.valueOf(window).equals(LAST_COOLDOWN_NOTE.get(avatar.getStringUUID()))) {
+                long remainSec = (cooldownMs - (now - last) + 999) / 1000;
+                ChatPush.pushTo(feedbackTo, name + "：冷却中，约 " + remainSec + " 秒后再试");
+                LAST_COOLDOWN_NOTE.put(avatar.getStringUUID(), window);
+            }
+            return;
         }
+        LAST_COOLDOWN_NOTE.remove(avatar.getStringUUID());
         LAST_WAKE.put(avatar.getStringUUID(), now);
-        requestWake(from, entry.modelId(), prompt, reason);
+        requestWake(from, entry.modelId(), prompt, reason, name, feedbackTo);
     }
 
     // ------------------------------------------------------------- ② 定时唤醒
@@ -201,7 +216,8 @@ public final class AvatarWake {
                 continue;
             }
             requestWake("ext-clock", entry.modelId(),
-                    "定时唤醒（每 " + entry.intervalSec() + " 秒）", "clock");
+                    "定时唤醒（每 " + entry.intervalSec() + " 秒）", "clock",
+                    displayName(entry), null);
         }
     }
 
@@ -211,26 +227,35 @@ public final class AvatarWake {
      * 聊天提及 → 只**名称**命中才唤醒（编号只提示，M12 的通道）。
      *
      * <p>由 {@code ChatRuntime.record} 在记录后调用；同一条消息提多次也只按模型去重（hits 已去重）。
+     * **触发人每条分支都有聊天栏回执**——玩家点名之后"没有任何反应"看起来就像功能坏了。
      */
     public static void onMentions(List<String> mentioned, String text, String playerName) {
         if (!ready() || mentioned == null) {
             return;
         }
         String safeText = text == null ? "" : text;
+        ServerPlayer speaker = playerName == null ? null
+                : server() == null ? null
+                : server().getPlayerList().getPlayerByName(playerName);
         for (String model : mentioned) {
-            if (!ChatMention.mentionsName(safeText, ChatRuntime.displayName(model))) {
-                continue;   // 只按编号命中：不唤醒（提示已由 M12 记）
+            String shown = ChatRuntime.displayName(model);
+            if (!ChatMention.mentionsName(safeText, shown)) {
+                // 只按编号命中：不唤醒（提示已由 M12 记）——但要让玩家知道"看见了"
+                ChatPush.pushTo(speaker, shown + "：已记录提示（编号提及不唤醒，名称才会）");
+                continue;
             }
             AvatarStore.Entry primary = store.primaryOf(model);
             if (primary == null) {
+                ChatPush.pushTo(speaker, shown + "：被提及，但没有主载体，未唤醒");
                 continue;   // 没载体：只提示，不唤醒
             }
             Entity carrier = findEntity(server(), primary.uuid());
             if (!(carrier instanceof AvatarEntity avatar)) {
+                ChatPush.pushTo(speaker, shown + "：被提及，但载体未加载，本轮只提示");
                 continue;   // 主载体未加载：本轮只提示（M12 已记），下次点名还会尝试
             }
             wakeFromPlayer("ext-mention-" + safe(playerName), avatar, "mention:name",
-                    "玩家 " + playerName + " 在聊天里点名了你：" + safeText);
+                    "玩家 " + playerName + " 在聊天里点名了你：" + safeText, speaker);
         }
     }
 
@@ -323,7 +348,8 @@ public final class AvatarWake {
         return e;
     }
 
-    private static void requestWake(String from, String model, String prompt, String reason) {
+    private static void requestWake(String from, String model, String prompt, String reason,
+                                    String carrierName, ServerPlayer feedbackTo) {
         SnowLeopard core = SnowLeopardMod.core();
         if (core == null) {
             return;
@@ -336,9 +362,28 @@ public final class AvatarWake {
             SnowLeopardMod.LOG.warn("[雪豹框架][唤醒] {} → {} 失败：{}（已补一条提示）",
                     reason, model, err.desc());
             ChatRuntime.addPendingMention(model);
+            if (feedbackTo != null) {
+                ChatPush.pushTo(feedbackTo, carrierName + "：唤醒被拒（"
+                        + brief(err.desc()) + "）· 已转为提示");
+            }
         } else {
             SnowLeopardMod.LOG.info("[雪豹框架][唤醒] {} → {} 已登记为 pending", reason, model);
+            if (feedbackTo != null) {
+                ChatPush.pushTo(feedbackTo, carrierName + "：唤醒已登记（" + reason
+                        + " → " + model + "）· 等待执行端拉取");
+            }
         }
+    }
+
+    /** 回执里的原因只留一行能读懂的（Error 描述可能很长）。 */
+    private static String brief(String desc) {
+        String s = desc == null ? "" : desc.replace('\n', ' ');
+        return s.length() > 60 ? s.substring(0, 60) + "…" : s;
+    }
+
+    /** 载体对外显示名（与身份单点一致：有名字用名字，没名字用模型编号）。 */
+    private static String displayName(AvatarStore.Entry entry) {
+        return entry.name().isEmpty() ? entry.modelId() : entry.name();
     }
 
     /** 唤醒 prompt 里也做单行化（它会被原样放进模型上下文）。 */

@@ -67,6 +67,9 @@ final class ClientSmokeTest {
             }
         }
         leftovers.forEach(net.minecraft.world.entity.Entity::discard);
+        // 登记表不随实体消失（卸载≠解绑）：上一轮的"小白"还挂在表里，先清自己的旧登记，
+        // 否则同名绑定撞"禁重名"（只清 clienttest 的，别人的不动）
+        EntityToolsRuntime.dispatch(model, "avatar", "avatar_unbind", Map.of());
 
         // ① 中立生物：僵尸猪灵（受击才反击），放在玩家侧前方 3 格
         ZombifiedPiglin pig = new ZombifiedPiglin(
