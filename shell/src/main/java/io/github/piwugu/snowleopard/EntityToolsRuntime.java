@@ -67,6 +67,12 @@ public final class EntityToolsRuntime {
         if (modelId == null || modelId.isBlank()) {
             return Result.error("dispatch 需要调用方模型编号（core 注入，不可伪造）");
         }
+        // 权限门禁预检（核心权限表；组=mod:snowleopard:<group>）
+        snowleopard.core.SnowLeopard core = SnowLeopardMod.core();
+        if (core != null && core.permissions() != null
+                && !core.permissions().table().allows("mod:snowleopard:" + group, tool)) {
+            return Result.error("权限拒绝: mod:snowleopard:" + group + "." + tool + "（权限文件可改判）");
+        }
         EntityToolsModule m = module(modelId);
         return m.call(group, tool, params, ref -> {
             for (Map.Entry<String, EntityToolsModule> e : MODULES.entrySet()) {
@@ -94,11 +100,12 @@ public final class EntityToolsRuntime {
         }
     }
 
-    /** 服务端每 tick：视角锁定执行与六条结束路径评估（M2）。 */
+    /** 服务端每 tick：视角锁定执行与六条结束路径评估（M2）+ 挖掘推进（M3）。 */
     @SubscribeEvent
     public static void onServerTick(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
         for (EntityToolsModule m : MODULES.values()) {
             m.tickViewLock();
+            m.tickInteract();
         }
     }
 

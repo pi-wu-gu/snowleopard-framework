@@ -40,9 +40,15 @@ public final class EntityToolsModule {
     private final BindingRegistry bindings = new BindingRegistry();
     private final DormancyManager dormancy = new DormancyManager();
     private final LookLockMachine lookLock = new LookLockMachine();
+    private final io.github.piwugu.snowleopard.tools.MiningTask mining =
+            new io.github.piwugu.snowleopard.tools.MiningTask();
     private float lastSetYaw;
     private float lastSetPitch;
     private String lockFace = "";
+    private net.minecraft.core.BlockPos miningTarget;
+    private static final com.mojang.authlib.GameProfile FAKE_PROFILE = new com.mojang.authlib.GameProfile(
+            java.util.UUID.nameUUIDFromBytes("snowleopard-fake".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+            "SnowLeopardFake");
     private volatile List<CandidateInfo> lastCandidates = List.of();
 
     public EntityToolsModule(String modelId, Ctx ctx) {
@@ -95,6 +101,14 @@ public final class EntityToolsModule {
                     case ToolSchemas.VIEW_UNLOCK -> unlockView();
                     case ToolSchemas.VIEW_STATUS -> viewStatus();
                     default -> Result.error("view 组无此工具: " + tool);
+                };
+                case io.github.piwugu.snowleopard.tools.GroupNames.INTERACT -> switch (tool) {
+                    case ToolSchemas.INTERACT_ATTACK -> attack(params, excludeRefs);
+                    case ToolSchemas.INTERACT_USE -> use(params);
+                    case ToolSchemas.INTERACT_PLACE -> place(params);
+                    case ToolSchemas.INTERACT_BREAK -> breakBlock(params);
+                    case ToolSchemas.INTERACT_STATUS -> interactStatus();
+                    default -> Result.error("interact 组无此工具: " + tool);
                 };
                 default -> Result.error("工具组未实现或未知: " + group + "（M2–M6 逐步开放）");
             };
@@ -401,6 +415,166 @@ public final class EntityToolsModule {
             case "east" -> new double[]{0.5, 0, 0};
             default -> new double[]{0, 0, 0};   // 缺省=中心
         };
+    }
+
+    // ── interact（M3）──
+
+    /** 攻击：显式目标；红线=其他编号实体一律拒绝；完成判定=血量变化回推。 */
+    Result attack(Map<String, Object> params, java.util.function.Predicate<String> excludeRefs) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        String target = String.valueOf(params.get("target"));
+        if (target == null || target.isBlank() || "null".equals(target)) {
+            return Result.error("attack 需要 target（候选编号）");
+        }
+        if (excludeRefs != null && excludeRefs.test(target)) {
+            return Result.error("红线：其他编号（模型）的实体一律无法使用——" + target);
+        }
+        ServerLevel level = ctx.level();
+        Entity e = level == null ? null : level.getEntity(java.util.UUID.fromString(target));
+        if (!(e instanceof LivingEntity victim) || !victim.isAlive()) {
+            return Result.error("攻击目标不可用（不存在或已死亡）");
+        }
+        faceToward(self, victim.getX(), victim.getY() + victim.getBbHeight() * 0.5, victim.getZ());
+        float before = victim.getHealth();
+        self.doHurtTarget(victim);
+        float after = victim.getHealth();
+        boolean hurt = after < before || !victim.isAlive();   // 服务端事实
+        return hurt ? Result.ok(Map.of("ok", true, "healthBefore", (double) before,
+                        "healthAfter", (double) after))
+                : Result.error("攻击未生效（血量无变化）——目标可能无敌/距离外");
+    }
+
+    /** 使用/交互方块（v1=方块交互；实体交互随后续里程碑）。完成判定=调用结果回执。 */
+    Result use(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        net.minecraft.core.BlockPos pos = resolveBlock(self, params);
+        ServerLevel level = ctx.level();
+        if (level == null || level.getBlockState(pos).isAir()) {
+            return Result.error("使用目标为空气（方块不存在）");
+        }
+        faceToward(self, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        net.minecraft.world.item.ItemStack hand = self.getMainHandItem();
+        net.minecraft.world.phys.BlockHitResult hit = new net.minecraft.world.phys.BlockHitResult(
+                new net.minecraft.world.phys.Vec3(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5),
+                net.minecraft.core.Direction.UP, pos, false);
+        var player = net.neoforged.neoforge.common.util.FakePlayerFactory.get(level, FAKE_PROFILE);
+        player.setPos(self.getX(), self.getY(), self.getZ());
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, hand);
+        var res = level.getBlockState(pos).useWithoutItem(level, player, hit);
+        return Result.ok(Map.of("ok", res.consumesAction(), "result", res.toString()));
+    }
+
+    /** 放置方块（v1 显式方块 id；M5 物品组接通后改从物品栏取）。完成判定=方块出现回推。 */
+    Result place(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        net.minecraft.core.BlockPos pos;
+        try {
+            pos = parseBlock(String.valueOf(params.get("target")));
+        } catch (RuntimeException e) {
+            return Result.error("place 需要 target（x,y,z）: " + e.getMessage());
+        }
+        String blockId = String.valueOf(params.get("block"));
+        var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(
+                net.minecraft.resources.ResourceLocation.parse(blockId));
+        if (block == net.minecraft.world.level.block.Blocks.AIR && !"minecraft:air".equals(blockId)) {
+            return Result.error("未知方块 id: " + blockId);
+        }
+        ServerLevel level = ctx.level();
+        if (level == null) {
+            return Result.error("世界未就绪");
+        }
+        faceToward(self, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        boolean ok = level.setBlockAndUpdate(pos, block.defaultBlockState());
+        boolean present = !level.getBlockState(pos).isAir();   // 服务端事实
+        return ok && present ? Result.ok(Map.of("ok", true, "placed", blockId))
+                : Result.error("放置后方块未出现（服务端回推不符）");
+    }
+
+    /** 破坏：持续动作（硬度→时长），tick 推进；完成=方块真没了；超时报因。 */
+    Result breakBlock(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        net.minecraft.core.BlockPos pos;
+        try {
+            pos = parseBlock(String.valueOf(params.get("target")));
+        } catch (RuntimeException e) {
+            return Result.error("break 需要 target（x,y,z）: " + e.getMessage());
+        }
+        ServerLevel level = ctx.level();
+        if (level == null || level.getBlockState(pos).isAir()) {
+            return Result.error("破坏目标为空气（方块不存在）");
+        }
+        faceToward(self, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        float speed = level.getBlockState(pos).getDestroySpeed(level, pos);
+        int required = Math.max(1, (int) Math.ceil(speed * 5));
+        int max = params.get("max_ticks") instanceof Number n ? n.intValue() : 200;
+        miningTarget = pos;
+        return mining.start(pos.getX() + "," + pos.getY() + "," + pos.getZ(), required, max);
+    }
+
+    Result interactStatus() {
+        Map<String, Object> d = new java.util.LinkedHashMap<>();
+        d.put("outcome", mining.outcome().name());
+        d.put("target", String.valueOf(mining.target()));
+        d.put("elapsed", mining.elapsed());
+        d.put("requiredTicks", mining.requiredTicks());
+        return Result.ok(d);
+    }
+
+    /** 每 tick 挖掘推进（壳侧 tick 钩子调；自测同步直调）。到时长执行 removeBlock 并回推封签 COMPLETED。 */
+    public void tickInteract() {
+        if (!mining.isBusy()) {
+            return;
+        }
+        ServerLevel level = ctx.level();
+        if (level == null || miningTarget == null) {
+            return;
+        }
+        boolean gone = level.getBlockState(miningTarget).isAir();
+        var outcome = mining.tick(gone);
+        if (outcome == io.github.piwugu.snowleopard.tools.MiningTask.Outcome.READY) {
+            level.removeBlock(miningTarget, false);   // 到时长执行移除
+            // 服务端回推封签：方块真没了才算 COMPLETED——不留 READY 半态（占着挖掘位挡新任务）
+            mining.tick(level.getBlockState(miningTarget).isAir());
+        }
+    }
+
+    private net.minecraft.core.BlockPos resolveBlock(LivingEntity self, Map<String, Object> params) {
+        Object t = params.get("target");
+        if (t != null && !String.valueOf(t).isBlank() && !"null".equals(t)) {
+            return parseBlock(String.valueOf(t));
+        }
+        // 缺省=视线 raycast（显式目标优先）
+        var hit = self.pick(8.0, 1.0f, false);
+        if (hit instanceof net.minecraft.world.phys.BlockHitResult bh
+                && bh.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
+            return bh.getBlockPos();
+        }
+        throw new IllegalArgumentException("视线内无方块——请显式给 target");
+    }
+
+    /** 自动面向（FridayFacing 语义：锁定期间跳过——锁定优先）。 */
+    private void faceToward(LivingEntity self, double x, double y, double z) {
+        if (lookLock.locked()) {
+            return;
+        }
+        FacingMath.Angle a = FacingMath.aim(
+                self.getX(), self.getY() + self.getEyeHeight(), self.getZ(), x, y, z);
+        self.setYRot((float) a.yaw());
+        self.setXRot((float) a.pitch());
+        lastSetYaw = (float) a.yaw();
+        lastSetPitch = (float) a.pitch();
     }
 
     // ── 死亡流（壳侧事件钩子调用）──

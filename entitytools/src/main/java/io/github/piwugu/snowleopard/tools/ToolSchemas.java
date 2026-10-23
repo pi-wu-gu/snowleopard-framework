@@ -28,6 +28,13 @@ public final class ToolSchemas {
     public static final String VIEW_UNLOCK = "unlock";
     public static final String VIEW_STATUS = "status";
 
+    // ── interact（交互，M3）──
+    public static final String INTERACT_ATTACK = "attack";
+    public static final String INTERACT_USE = "use";
+    public static final String INTERACT_PLACE = "place";
+    public static final String INTERACT_BREAK = "break";
+    public static final String INTERACT_STATUS = "status";
+
     // ── entity_self（自我观测）──
     public static final String SELF_STATUS = "status";
 
@@ -76,6 +83,32 @@ public final class ToolSchemas {
                     Map.of("type", "object", "note", "无参数")),
             new ToolRegistry.Tool(VIEW_STATUS, "查询视角与锁定状态",
                     "view.status() → {yaw, pitch, locked, kind?, target?, age?, lastEnd?}",
+                    Map.of("type", "object", "note", "无参数")));
+
+    public static final java.util.List<ToolRegistry.Tool> INTERACT_TOOLS = java.util.List.of(
+            new ToolRegistry.Tool(INTERACT_ATTACK, "攻击目标实体（完成判定=血量变化回推）",
+                    "interact.attack(target) → {ok, healthBefore, healthAfter}",
+                    Map.of("type", "object", "required", java.util.List.of("target"),
+                            "target", "候选编号（显式目标优先）",
+                            "reversible", "false", "state", "changes_world",
+                            "红线", "其他编号实体一律拒绝")),
+            new ToolRegistry.Tool(INTERACT_USE, "对方块使用/交互（完成判定=方块状态回推）",
+                    "interact.use(target) → {ok, result}",
+                    Map.of("type", "object", "required", java.util.List.of("target"),
+                            "target", "\"x,y,z\"（缺省=视线 raycast）",
+                            "reversible", "depends", "state", "changes_world")),
+            new ToolRegistry.Tool(INTERACT_PLACE, "放置方块（完成判定=方块出现回推；自动面向目标）",
+                    "interact.place(target, block) → {ok, placed}",
+                    Map.of("type", "object", "required", java.util.List.of("target", "block"),
+                            "target", "\"x,y,z\" 放置位", "block", "方块 id 如 minecraft:stone",
+                            "reversible", "false", "state", "changes_world")),
+            new ToolRegistry.Tool(INTERACT_BREAK, "破坏方块（持续动作：按硬度计时长；超时报因）",
+                    "interact.break(target, max_ticks?) → {target, requiredTicks, maxTicks}；进度查 interact.status",
+                    Map.of("type", "object", "required", java.util.List.of("target"),
+                            "target", "\"x,y,z\"", "max_ticks", "可选预算（缺省 200）",
+                            "reversible", "false", "state", "changes_world")),
+            new ToolRegistry.Tool(INTERACT_STATUS, "查询挖掘进行状态与结果",
+                    "interact.status() → {outcome, target, elapsed, requiredTicks}",
                     Map.of("type", "object", "note", "无参数")));
 
     private ToolSchemas() {

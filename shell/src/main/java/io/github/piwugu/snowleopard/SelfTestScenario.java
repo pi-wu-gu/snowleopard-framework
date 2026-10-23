@@ -73,6 +73,7 @@ public final class SelfTestScenario {
             ok &= step("M1", blocked instanceof Result.Error, "死亡后控制类工具显式拒绝", String.valueOf(blocked));
 
             ok &= runM2(level, base, z2, ref2);
+            ok &= runM3(level, base);
         } catch (Throwable t) {
             ok = false;
             SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST] 场景异常", t);
@@ -186,6 +187,97 @@ public final class SelfTestScenario {
                         + "） look_at=" + data(la),
                 String.valueOf(data(s7)));
         EntityToolsRuntime.dispatch(model, "view", "unlock", Map.of());
+        return ok;
+    }
+
+    /** M3：交互四动作（服务端回推）+ 寻址红线 + 硬方块超时报因。 */
+    private static boolean runM3(ServerLevel level, BlockPos base) {
+        boolean ok = true;
+        String model = "selftest-m3";
+
+        // 造化身 z6 与受害者 z7
+        Zombie z6 = new Zombie(level);
+        z6.moveTo(base.getX() + 0.5, base.getY(), base.getZ() + 4.5, 0, 0);
+        level.addFreshEntity(z6);
+        Zombie z7 = new Zombie(level);
+        z7.moveTo(base.getX() + 1.5, base.getY(), base.getZ() + 6.5, 0, 0);
+        level.addFreshEntity(z7);
+        EntityToolsRuntime.dispatch(model, "sense", "open", Map.of());
+        Result pick = EntityToolsRuntime.dispatch(model, "entity", "pick",
+                Map.of("target", z6.getUUID().toString()));
+        ok &= step("M3", pick instanceof Result.Ok, "绑定化身 z6", String.valueOf(data(pick)));
+
+        // 攻击：完成判定=血量变化回推
+        Result atk = EntityToolsRuntime.dispatch(model, "interact", "attack",
+                Map.of("target", z7.getUUID().toString()));
+        ok &= step("M3", atk instanceof Result.Ok
+                        && String.valueOf(data(atk)).contains("healthAfter="),
+                "attack 命中（血量回推）", String.valueOf(data(atk)));
+
+        // 寻址红线：他人编号实体一律拒绝
+        String other = "selftest-m3-other";
+        Zombie z8 = new Zombie(level);
+        z8.moveTo(base.getX() + 2.5, base.getY(), base.getZ() + 6.5, 0, 0);
+        level.addFreshEntity(z8);
+        EntityToolsRuntime.dispatch(other, "sense", "open", Map.of());
+        EntityToolsRuntime.dispatch(other, "entity", "pick",
+                Map.of("target", z8.getUUID().toString()));
+        Result deny = EntityToolsRuntime.dispatch(model, "interact", "attack",
+                Map.of("target", z8.getUUID().toString()));
+        ok &= step("M3", deny instanceof Result.Error
+                        && String.valueOf(deny).contains("其他编号"),
+                "红线：攻击他人编号实体被拒", String.valueOf(deny));
+
+        // 放置：完成判定=方块出现回推；自动面向（未锁定时）
+        BlockPos p1 = base.offset(3, 1, 3);
+        Result place = EntityToolsRuntime.dispatch(model, "interact", "place",
+                Map.of("target", p1.getX() + "," + p1.getY() + "," + p1.getZ(),
+                        "block", "minecraft:stone"));
+        ok &= step("M3", place instanceof Result.Ok && !level.getBlockState(p1).isAir(),
+                "place 方块出现（服务端回推）", String.valueOf(data(place)));
+        FacingMath.Angle aim = FacingMath.aim(
+                z6.getX(), z6.getY() + z6.getEyeHeight(), z6.getZ(),
+                p1.getX() + 0.5, p1.getY() + 0.5, p1.getZ() + 0.5);
+        ok &= step("M3", FacingMath.deltaDeg(z6.getYRot(), aim.yaw()) < 2.0,
+                "place 自动面向目标（FacingMath）", "yaw=" + z6.getYRot() + " expected=" + aim.yaw());
+
+        // 破坏：持续动作（石头硬度 1.5 → 8 tick）→ 完成=方块真没了（移除后同 tick 回推封签）
+        Result brk = EntityToolsRuntime.dispatch(model, "interact", "break",
+                Map.of("target", p1.getX() + "," + p1.getY() + "," + p1.getZ()));
+        for (int i = 0; i < 12 && !level.getBlockState(p1).isAir(); i++) {
+            EntityToolsRuntime.module(model).tickInteract();
+        }
+        Result bs = EntityToolsRuntime.dispatch(model, "interact", "status", Map.of());
+        ok &= step("M3", brk instanceof Result.Ok && level.getBlockState(p1).isAir()
+                        && String.valueOf(data(bs)).contains("COMPLETED"),
+                "break 硬方块挖完（方块真没了+COMPLETED）",
+                "brk=" + data(brk) + " " + data(bs));
+
+        // 硬方块超时报因（黑曜石硬度 50 → 需求 250 tick，预算 3）
+        BlockPos p2 = base.offset(-3, 1, 3);
+        level.setBlockAndUpdate(p2, net.minecraft.world.level.block.Blocks.OBSIDIAN.defaultBlockState());
+        Result brk2 = EntityToolsRuntime.dispatch(model, "interact", "break",
+                Map.of("target", p2.getX() + "," + p2.getY() + "," + p2.getZ(), "max_ticks", 3));
+        for (int i = 0; i < 5; i++) {
+            EntityToolsRuntime.module(model).tickInteract();
+        }
+        Result ts = EntityToolsRuntime.dispatch(model, "interact", "status", Map.of());
+        ok &= step("M3", brk2 instanceof Result.Ok
+                        && String.valueOf(data(ts)).contains("TIMEOUT")
+                        && !level.getBlockState(p2).isAir(),
+                "硬方块超时报因（黑曜石仍在）", "brk2=" + data(brk2) + " " + data(ts));
+
+        // 使用：音符盒按一下→音高变化（服务端状态回推）
+        BlockPos p3 = base.offset(0, 1, -3);
+        level.setBlockAndUpdate(p3, net.minecraft.world.level.block.Blocks.NOTE_BLOCK.defaultBlockState());
+        int noteBefore = level.getBlockState(p3).getValue(
+                net.minecraft.world.level.block.NoteBlock.NOTE);
+        Result use = EntityToolsRuntime.dispatch(model, "interact", "use",
+                Map.of("target", p3.getX() + "," + p3.getY() + "," + p3.getZ()));
+        int noteAfter = level.getBlockState(p3).getValue(
+                net.minecraft.world.level.block.NoteBlock.NOTE);
+        ok &= step("M3", use instanceof Result.Ok && noteAfter != noteBefore,
+                "use 方块交互生效（音高 " + noteBefore + "→" + noteAfter + "）", String.valueOf(data(use)));
         return ok;
     }
 
