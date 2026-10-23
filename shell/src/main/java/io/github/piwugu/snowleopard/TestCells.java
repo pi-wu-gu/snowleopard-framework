@@ -17,7 +17,7 @@ import net.minecraft.world.phys.AABB;
  * <ul>
  *   <li><b>清场</b>——建房时把房内残留实体与方块全部重置（世界跨运行持久化，不清场必漏脏）；</li>
  *   <li><b>封壳</b>——黑曜石底/顶/四壁：房内游荡出不去、房外残留进不来；</li>
- *   <li><b>垂直分层</b>——层距 {@link #PITCH}=56 &gt; 2×感知扫描半径(32)，层间互不可见；
+ *   <li><b>垂直分层</b>——层距 {@link #PITCH}=46（相邻房内部最近距离 34 &gt; 扫描半径 32，层间互不可见）；
  *       同区块柱上下堆叠，实体 tick 语义与地面层完全一致（远区块非 entity-ticking 是踩过的坑）。</li>
  * </ul>
  *
@@ -31,8 +31,14 @@ final class TestCells {
     /** 内空高（y）：测试最大用到 +6（高差预检），12 充裕。 */
     static final int HEIGHT = 12;
 
-    /** 层距（垂直）：&gt; 2×感知扫描半径(32)——相邻层互不可见，扫描/查询不串房。 */
-    static final int PITCH = 56;
+    /**
+     * 层距（垂直）：相邻房地面高差 46，房高 12 → 相邻房**内部最近**垂直距离 = 34 &gt; 扫描半径 32
+     * （感知中心在房内地面，邻房实体至少差 34 格）→ 互不可见，扫描/查询不串房。
+     *
+     * <p>为什么不是 56：8 房时 {@code 锚点(-60) + 7×56 + 房高(12) = 344} 超出世界建筑高度 320
+     * （setBlock 静默失败 → 全线假失败）。46 时顶 274，留足余量给将来加房。
+     */
+    static final int PITCH = 46;
 
     private static final BlockState SHELL = Blocks.OBSIDIAN.defaultBlockState();
     private static final BlockState FILL = Blocks.AIR.defaultBlockState();

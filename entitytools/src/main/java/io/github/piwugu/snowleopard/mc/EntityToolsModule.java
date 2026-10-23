@@ -224,6 +224,12 @@ public final class EntityToolsModule {
         if (b instanceof Result.Error) {
             return b;   // 绑定冲突（1:1 被他人占用）
         }
+        // 选中者保持活动（裁决）：若它曾被**别的模型**的 pick 休眠，这里唤醒——
+        // 否则跨模型会互相把对方要绑的实体睡死（NoAi 随存档落盘，M8 多模型真机场景发现）
+        ServerLevel lvPick = ctx.level();
+        if (lvPick != null && lvPick.getEntity(java.util.UUID.fromString(target)) instanceof LivingEntity chosen) {
+            dormancy.wake(chosen);
+        }
         // 动态记录范围含绑定实体（裁决 §1.4）——绑定即自动入册，controller=控制模型编号
         watchFeed.watch(target, modelId);
         // 未选取的候选进入休眠（身份消歧）；选中者保持活动

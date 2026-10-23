@@ -34,11 +34,12 @@ public final class SelfTestScenario {
         try {
             level = server.overworld();
             // 一测一房（2026-10-23 裁决）：封闭单元塔——建房=清场+封壳，层距 56>2×扫描半径，
-            // 层间互不可见。M1→M7 各占一层（index 0..6），残留/游荡不串房。
-            BlockPos[] rooms = TestCells.buildAll(level, 7);
+            // 层间互不可见。M1→M8 各占一层（index 0..7），残留/游荡不串房。
+            BlockPos[] rooms = TestCells.buildAll(level, 8);
             m4Room = rooms[3];   // 先定 M4 房——后面同步段异常也不能让 tick 驱动器拿到 null
+            m8Room = rooms[7];   // M8 同理（它由 M4 的收口 phase 启动）
             base = rooms[0];
-            step("M1", true, "建 7 座封闭测试房（一测一房）",
+            step("M1", true, "建 8 座封闭测试房（一测一房）",
                     "层距=" + TestCells.PITCH + " 内空=" + TestCells.INTERIOR + "x" + TestCells.HEIGHT);
             EntityToolsRuntime.setScanAnchor("selftest-m1", rooms[0]);
 
@@ -102,10 +103,14 @@ public final class SelfTestScenario {
     /** M4 的房间基准（tick 驱动器在同步段之后才启动，经此中转）。 */
     private static BlockPos m4Room;
 
+    /** M8 的房间基准（两个模型同居一房——隔离要验的是模型级，不是房间级）。 */
+    private static BlockPos m8Room;
+
     /** M4 每 tick 驱动（与实体物理同拍）。 */
     @SubscribeEvent
     public static void onServerTick(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
         M4.tick();
+        M8.tick();
     }
 
     /** M2：look 一致性 + 六条结束路径。z2 为绑定实体（M1 死亡流后重新开感官选取，从 M1 房搬入）。 */
@@ -514,13 +519,192 @@ public final class SelfTestScenario {
                         ok &= step("M4", r3 instanceof Result.Error && String.valueOf(r3).contains("未加载"),
                                 "不可达：目标区块未加载报因", String.valueOf(r3));
                         next();
+                        // 收口交给 M8（多模型并发）：它结束时统一打印总结并 halt
+                        M8.start(server, level, m8Room, ok);
+                    }
+                }
+            } catch (Throwable t) {
+                ok = false;
+                SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST-M4] 场景异常", t);
+                SnowLeopardMod.LOG.info("[雪豹框架][SELFTEST] ===== FAIL =====");
+                server.halt(false);
+            }
+        }
+
+        private static void next() {
+            phase++;
+            wait = 0;
+        }
+    }
+
+    /**
+     * M8：多模型并发（两个模型**同居一房**——要验的是模型级隔离，不是房间级）。
+     *
+     * <p>六件事：① 各自绑定互不影响（含"别人的绑定实体进不了我的候选集"）；② 归属反查对得上；
+     * ③ 跨模型红线（互相攻击都被拒）；④ 监视流互不串；⑤ 两台移动机器同 tick 并发各自推进；
+     * ⑥ 一个模型 stop 不影响另一个（各自的机器是各自一份）。
+     *
+     * <p>为什么必须真机：隔离靠的是"每模型一个 EntityToolsModule"这个结构事实，
+     * headless 单测造不出两个模块共用世界的情形。
+     */
+    private static final class M8 {
+
+        private static net.minecraft.server.MinecraftServer server;
+        private static ServerLevel level;
+        private static BlockPos base;
+        private static boolean ok;
+        private static int phase;
+        private static int wait;
+        private static final String MA = "selftest-m8a";
+        private static final String MB = "selftest-m8b";
+        private static Zombie zA;
+        private static Zombie zB;
+        private static String refA;
+        private static String refB;
+
+        static void start(net.minecraft.server.MinecraftServer s, ServerLevel lv, BlockPos b, boolean okSoFar) {
+            server = s;
+            level = lv;
+            base = b;
+            ok = okSoFar;
+            phase = 0;
+            wait = 0;
+            EntityToolsRuntime.setScanAnchor(MA, b);
+            EntityToolsRuntime.setScanAnchor(MB, b);
+        }
+
+        static void tick() {
+            if (server == null || level == null || base == null || phase > 6) {
+                return;
+            }
+            try {
+                switch (phase) {
+                    case 0 -> {   // 造两实体 → 两模型各自 open/pick（同房共存）
+                        Zombie a = new Zombie(level);
+                        a.setPersistenceRequired();   // 测试实体=固定装置：禁止远距静默 discard
+                        a.moveTo(base.getX() - 6.5, base.getY(), base.getZ() + 0.5, 0, 0);
+                        level.addFreshEntity(a);
+                        a.goalSelector.removeAllGoals(g -> true);
+                        a.targetSelector.removeAllGoals(g -> true);
+                        Zombie b = new Zombie(level);
+                        b.setPersistenceRequired();
+                        b.moveTo(base.getX() + 6.5, base.getY(), base.getZ() + 0.5, 0, 0);
+                        level.addFreshEntity(b);
+                        b.goalSelector.removeAllGoals(g -> true);
+                        b.targetSelector.removeAllGoals(g -> true);
+                        zA = a;
+                        zB = b;
+                        refA = a.getUUID().toString();
+                        refB = b.getUUID().toString();
+
+                        Result oa = EntityToolsRuntime.dispatch(MA, "sense", "open", Map.of());
+                        ok &= step("M8", oa instanceof Result.Ok
+                                        && String.valueOf(data(oa)).contains(refA),
+                                "A 开感官见本房候选", String.valueOf(data(oa)));
+                        Result pa = EntityToolsRuntime.dispatch(MA, "entity", "pick",
+                                Map.of("target", refA));
+                        ok &= step("M8", pa instanceof Result.Ok, "A 绑定 zA", String.valueOf(data(pa)));
+
+                        Result ob = EntityToolsRuntime.dispatch(MB, "sense", "open", Map.of());
+                        ok &= step("M8", ob instanceof Result.Ok
+                                        && !String.valueOf(data(ob)).contains(refA),
+                                "B 的候选集不含 A 的绑定实体（扫描级隔离）", String.valueOf(data(ob)));
+                        Result pb = EntityToolsRuntime.dispatch(MB, "entity", "pick",
+                                Map.of("target", refB));
+                        ok &= step("M8", pb instanceof Result.Ok, "B 绑定 zB", String.valueOf(data(pb)));
+
+                        // 跨模型休眠不互相睡死：A 的 pick 会休眠它自己的其余候选（含 zB），
+                        // B 绑定 zB 时必须把它唤醒（pick 里补的 wake——本场景发现的产品缺陷）
+                        ok &= step("M8", !zA.isNoAi() && !zB.isNoAi(),
+                                "两绑定实体都保持活动（跨模型不睡死）",
+                                "noAi zA=" + zA.isNoAi() + " zB=" + zB.isNoAi());
+                        next();
+                    }
+                    case 1 -> {   // 归属反查：各自指向自己的实体
+                        Result sa = EntityToolsRuntime.dispatch(MA, "entity", "status", Map.of());
+                        Result sb = EntityToolsRuntime.dispatch(MB, "entity", "status", Map.of());
+                        ok &= step("M8", String.valueOf(data(sa)).contains(refA)
+                                        && !String.valueOf(data(sa)).contains(refB),
+                                "A 归属指向 zA（不含 zB）", String.valueOf(data(sa)));
+                        ok &= step("M8", String.valueOf(data(sb)).contains(refB)
+                                        && !String.valueOf(data(sb)).contains(refA),
+                                "B 归属指向 zB（不含 zA）", String.valueOf(data(sb)));
+                        next();
+                    }
+                    case 2 -> {   // 跨模型红线：互相攻击都被拒
+                        Result atkA = EntityToolsRuntime.dispatch(MB, "interact", "attack",
+                                Map.of("target", refA));
+                        ok &= step("M8", atkA instanceof Result.Error
+                                        && String.valueOf(atkA).contains("红线"),
+                                "B 攻击 A 的实体被拒（红线）", String.valueOf(atkA));
+                        Result atkB = EntityToolsRuntime.dispatch(MA, "interact", "attack",
+                                Map.of("target", refB));
+                        ok &= step("M8", atkB instanceof Result.Error
+                                        && String.valueOf(atkB).contains("红线"),
+                                "A 攻击 B 的实体被拒（红线）", String.valueOf(atkB));
+                        next();
+                    }
+                    case 3 -> {   // 监视流互不串（绑定即入册，各自只含自己）
+                        Result la = EntityToolsRuntime.dispatch(MA, "watch", "watch_list", Map.of());
+                        Result lb = EntityToolsRuntime.dispatch(MB, "watch", "watch_list", Map.of());
+                        ok &= step("M8", String.valueOf(data(la)).contains(refA)
+                                        && !String.valueOf(data(la)).contains(refB),
+                                "A 的监视列表只含 zA", String.valueOf(data(la)));
+                        ok &= step("M8", String.valueOf(data(lb)).contains(refB)
+                                        && !String.valueOf(data(lb)).contains(refA),
+                                "B 的监视列表只含 zB", String.valueOf(data(lb)));
+                        next();
+                    }
+                    case 4 -> {   // 并发移动：同一 tick 各发一个 goto（相反方向）
+                        String ta = (base.getX() - 2.5) + "," + base.getY() + "," + (base.getZ() + 0.5);
+                        String tb = (base.getX() + 2.5) + "," + base.getY() + "," + (base.getZ() + 0.5);
+                        Result ga = EntityToolsRuntime.dispatch(MA, "move", "goto",
+                                Map.of("target", ta, "max_ticks", 80));
+                        Result gb = EntityToolsRuntime.dispatch(MB, "move", "goto",
+                                Map.of("target", tb, "max_ticks", 80));
+                        ok &= step("M8", ga instanceof Result.Ok && gb instanceof Result.Ok,
+                                "两模型同 tick 各起一台移动机器", "A=" + data(ga) + " B=" + data(gb));
+                        next();
+                    }
+                    case 5 -> {   // 半途停 A：A 真中断，B 继续（两台机器各自一份，互不覆盖）
+                        wait++;
+                        if (wait < 6) {
+                            return;
+                        }
+                        Result stopA = EntityToolsRuntime.dispatch(MA, "move", "stop", Map.of());
+                        ok &= step("M8", stopA instanceof Result.Ok
+                                        && String.valueOf(data(stopA)).contains("stopped"),
+                                "A 半途停机（有移动在进行中）", String.valueOf(stopA));
+                        Result sa = EntityToolsRuntime.dispatch(MA, "move", "status", Map.of());
+                        Result sb = EntityToolsRuntime.dispatch(MB, "move", "status", Map.of());
+                        ok &= step("M8", String.valueOf(data(sa)).contains("outcome=TIMEOUT"),
+                                "A 报中断（TIMEOUT，不是假到达）", String.valueOf(data(sa)));
+                        ok &= step("M8", String.valueOf(data(sb)).contains("mode=GOTO")
+                                        && !String.valueOf(data(sb)).contains("outcome=TIMEOUT"),
+                                "B 不受 A 停机影响（仍在 GOTO）", String.valueOf(data(sb)));
+                        next();
+                    }
+                    default -> {   // 6：B 继续到达 + A 停在半途 → 收口
+                        wait++;
+                        if (wait < 40) {
+                            return;
+                        }
+                        Result sa = EntityToolsRuntime.dispatch(MA, "move", "status", Map.of());
+                        Result sb = EntityToolsRuntime.dispatch(MB, "move", "status", Map.of());
+                        ok &= step("M8", String.valueOf(data(sb)).contains("outcome=DONE"),
+                                "B 继续推进并到达（A 停机没打断 B）", String.valueOf(data(sb)));
+                        ok &= step("M8", String.valueOf(data(sa)).contains("outcome=TIMEOUT")
+                                        && !String.valueOf(data(sa)).contains("outcome=DONE"),
+                                "A 停在半途未到达（状态未被 B 覆盖）", String.valueOf(data(sa)));
+                        phase = 7;   // halt 在 tick 末生效，先关闸防重入
                         SnowLeopardMod.LOG.info("[雪豹框架][SELFTEST] ===== {} =====", ok ? "PASS" : "FAIL");
                         server.halt(false);
                     }
                 }
             } catch (Throwable t) {
                 ok = false;
-                SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST-M4] 场景异常", t);
+                phase = 7;
+                SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST-M8] 场景异常", t);
                 SnowLeopardMod.LOG.info("[雪豹框架][SELFTEST] ===== FAIL =====");
                 server.halt(false);
             }
