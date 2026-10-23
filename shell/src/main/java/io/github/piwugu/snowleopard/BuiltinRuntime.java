@@ -91,4 +91,9 @@ public final class BuiltinRuntime {
             SCOPES.remove(modelId);
         }
     }
+
+    /** 已知模型（有句柄的）；聊天栏巡检按它遍历。 */
+    public static java.util.Set<String> knownCallers() {
+        return java.util.Set.copyOf(SCOPES.keySet());
+    }
 }

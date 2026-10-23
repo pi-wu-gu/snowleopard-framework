@@ -87,6 +87,8 @@ public final class SnowLeopardMod {
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(EntityToolsRuntime::onLivingHurt);
             // 每 tick：视角锁定/挖掘/移动推进/动态自动记录（M2–M6 的执行面）
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(EntityToolsRuntime::onServerTick);
+            // 每 10 秒：汇总行 → 聊天栏（M11；推成功才标已提示）
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(ChatPusher::onServerTick);
             // M1 真机场景自测：M1–M3 同步段 + M4 tick 驱动段（开发流程验收）
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SelfTestScenario::onServerStarted);
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SelfTestScenario::onServerTick);
