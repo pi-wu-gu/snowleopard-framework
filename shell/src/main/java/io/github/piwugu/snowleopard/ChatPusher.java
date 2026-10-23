@@ -34,7 +34,9 @@ final class ChatPusher {
         }
         lastTick = now;
         for (String caller : BuiltinRuntime.knownCallers()) {
-            if (caller.startsWith("selftest-")) {
+            // 自测与客户端验收模型都不推：它们的断言要"恰好一次"，巡检插一脚就会变成两次
+            // （clienttest 还会让验收自己的 push 少掉唯一性证据，2026-10-23 23:12 补）
+            if (caller.startsWith("selftest-") || caller.startsWith("clienttest")) {
                 continue;
             }
             String line = WakeBridge.turnLine(caller);

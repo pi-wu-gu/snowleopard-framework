@@ -89,11 +89,19 @@ public final class SnowLeopardMod {
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(EntityToolsRuntime::onServerTick);
             // 每 10 秒：汇总行 → 聊天栏（M11；推成功才标已提示）
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(ChatPusher::onServerTick);
-            // M1 真机场景自测：M1–M3 同步段 + M4 tick 驱动段（开发流程验收）
-            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SelfTestScenario::onServerStarted);
-            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SelfTestScenario::onServerTick);
-
-            SelfTest.run(core);
+            // 客户端验收模式（-Dsnowleopard.clienttest=true）：只跑"绑定中立生物 + 推送一行"。
+            // 全量自测收尾会 server.halt(false)，在集成服务器上等于把客户端关掉，所以必须分道
+            if (Boolean.getBoolean("snowleopard.clienttest")) {
+                net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(ClientSmokeTest::onPlayerJoin);
+                LOG.info("[雪豹框架] 客户端验收模式：跳过全量自测（不建塔、不 halt）");
+                String auto = System.getProperty("snowleopard.autoconnect", "");
+                LOG.info("[雪豹框架] 自动连接目标: {}", auto.isBlank() ? "（未设置）" : auto);
+            } else {
+                // M1 真机场景自测：M1–M3 同步段 + M4 tick 驱动段（开发流程验收）
+                net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SelfTestScenario::onServerStarted);
+                net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SelfTestScenario::onServerTick);
+                SelfTest.run(core);
+            }
         } catch (Throwable t) {
             // 装配失败只该让"工具组能力不可用"，不该让整个模组加载失败
             LOG.error("[雪豹框架] 核心装配失败——决策依赖不可用", t);
