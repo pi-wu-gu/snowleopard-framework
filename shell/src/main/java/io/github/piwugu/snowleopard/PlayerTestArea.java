@@ -51,6 +51,12 @@ public final class PlayerTestArea {
                 + "（棋盘格：平滑石/石英按区块）";
     }
 
+    /** 测试区中心站立点（传送/重生用）；未建返回 null。 */
+    public static net.minecraft.core.BlockPos anchor() {
+        return floorY == Integer.MIN_VALUE ? null
+                : new net.minecraft.core.BlockPos(BASE_X + SIZE / 2, floorY + 1, BASE_Z + SIZE / 2);
+    }
+
     /** 幂等构建：有记录且标记块匹配 → 跳过；否则（首次或世界变了）重建。 */
     public static void ensureBuilt(MinecraftServer server) {
         ServerLevel level = server.overworld();

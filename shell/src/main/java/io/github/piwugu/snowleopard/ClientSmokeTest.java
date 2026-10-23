@@ -55,6 +55,17 @@ final class ClientSmokeTest {
     private static void run(ServerPlayer player) {
         String model = "clienttest";
         ServerLevel level = player.serverLevel();
+
+        // ⓪ 先传送玩家到测试区中心并设重生点（用户 2026-10-24 03:15 要求）——
+        //    必须在取 base/设扫描锚点/造实体**之前**，否则锚点钉在旧出生点、
+        //    新造的实体全都不在候选里（2026-10-24 03:19 真机踩过：3 条连锁假失败）
+        net.minecraft.core.BlockPos anchor = PlayerTestArea.anchor();
+        if (anchor != null) {
+            player.teleportTo(level, anchor.getX() + 0.5, anchor.getY(), anchor.getZ() + 0.5, 0, 0);
+            player.setRespawnPosition(level.dimension(), anchor, 0f, true, false);
+            ok("已传送至测试区并设重生点", true, PlayerTestArea.describe());
+        }
+
         BlockPos base = player.blockPosition();
         EntityToolsRuntime.setScanAnchor(model, base);
         SnowLeopardMod.LOG.info("[雪豹框架][CLIENT] ===== 客户端验收开始（玩家 {}，位置 {}）=====",

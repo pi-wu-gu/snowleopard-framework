@@ -226,7 +226,7 @@ public final class AiHost {
         Map<?, ?> call = (Map<?, ?>) callObj;
         String name = str(((Map<?, ?>) call.get("function")).get("name"));
         String argsJson = str(((Map<?, ?>) call.get("function")).get("arguments"));
-        Entry entry = TOOLS.get(name);
+        Entry entry = TOOLS.get(name);   // 暴露名（重名带组前缀）→ 组短名+真名
         if (entry == null) {
             return "Error: 未知工具 " + name + "（清单里没有）";
         }
@@ -259,17 +259,28 @@ public final class AiHost {
         if (toolsBuilt) {
             return;
         }
+        // 两遍扫描：**重名的工具一律带组前缀暴露**（status 在 sense/entity_self/view/interact 各一——
+        // 旧做法"先到先得"会让 view_status/interact_status 对模型不可见，2026-10-24 用户点名修掉）
+        Map<String, Integer> counts = new java.util.HashMap<>();
+        for (ToolRegistry.Group g : core.registry().groups()) {
+            for (ToolRegistry.Tool t : g.tools()) {
+                counts.merge(t.name(), 1, Integer::sum);
+            }
+        }
         for (ToolRegistry.Group g : core.registry().groups()) {
             String shortGroup = g.full().substring(g.full().lastIndexOf(':') + 1);
             for (ToolRegistry.Tool t : g.tools()) {
-                Entry prev = TOOLS.putIfAbsent(t.name(), new Entry(shortGroup, t));
+                String exposed = counts.getOrDefault(t.name(), 0) > 1
+                        ? shortGroup + "." + t.name() : t.name();
+                Entry prev = TOOLS.putIfAbsent(exposed, new Entry(shortGroup, t));
                 if (prev != null) {
-                    SnowLeopardMod.LOG.warn("[雪豹框架][host] 工具重名 {}（{} 与 {}），后者不进清单",
-                            t.name(), prev.group(), shortGroup);
+                    SnowLeopardMod.LOG.warn("[雪豹框架][host] 暴露名仍冲突 {}（{} 与 {}），后者不进清单",
+                            exposed, prev.group(), shortGroup);
                 }
             }
         }
         toolsBuilt = true;
+        SnowLeopardMod.LOG.info("[雪豹框架][host] 工具清单 {} 个（重名已带组前缀）", TOOLS.size());
     }
 
     /** OpenAI 工具清单（由注册表生成；params 的扁平"参数名→说明"形状转成 JSON Schema）。 */
