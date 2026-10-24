@@ -1136,7 +1136,20 @@ public final class EntityToolsModule {
         ServerLevel level = ctx.level();
         var access = level.registryAccess();
         String rid = String.valueOf(params.get("recipe_id"));
-        int count = params.get("count") instanceof Number n ? n.intValue() : 1;
+        // count 宽容解析（2026-10-24 12:10 真机断言抓到）：schema 里所有参数都是 string 型，
+        // 模型常发 "count":"2"——只认 Number 会静默落到 1（真机证据：count=2 实合 1 次）。
+        // Number（模型发数字 JSON）与可解析字符串都收；解析不动才回落 1，由下面的 1..8 夹取兜底
+        int count = 1;
+        Object cv = params.get("count");
+        if (cv instanceof Number n) {
+            count = n.intValue();
+        } else if (cv != null) {
+            try {
+                count = Integer.parseInt(String.valueOf(cv).trim());
+            } catch (NumberFormatException ignored) {
+                // 保持 1
+            }
+        }
         if (count < 1 || count > 8) {
             return Result.error("count 1..8: " + count);
         }
@@ -1222,12 +1235,18 @@ public final class EntityToolsModule {
             pack.setItem(slot, left);
             deducted.merge(slot, 1, Integer::sum);
         }
+        // 余料按 count 放大（2026-10-24 11:57 修）：1.9.3 之前 getRemainingItems 在循环外只算一次，
+        // count=8 的蛋糕只退 3 只桶里的 1 只——余料是"每合成一次产生一份"，必须进 per-count 循环
+        List<net.minecraft.world.item.ItemStack> remainders = new ArrayList<>();
+        for (var rem : recipe.getRemainingItems(input)) {
+            if (!rem.isEmpty()) {
+                remainders.add(rem.copy());
+            }
+        }
         List<net.minecraft.world.item.ItemStack> toPack = new ArrayList<>();
         for (int c = 0; c < count; c++) {
             toPack.add(result.copy());
-        }
-        for (var rem : recipe.getRemainingItems(input)) {
-            if (!rem.isEmpty()) {
+            for (var rem : remainders) {
                 toPack.add(rem.copy());
             }
         }

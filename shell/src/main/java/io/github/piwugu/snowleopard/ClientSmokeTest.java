@@ -142,6 +142,63 @@ final class ClientSmokeTest {
             ChatPush.push("小白背包已备货：橡木原木×64（self:pack:0）· 石头×64（self:pack:1）");
         }
 
+        // ⑥·补2 两条确定性断言（2026-10-24 11:57；不依赖模型自发布调用——1.9.2 的教训：
+        //    靠"模型碰巧踩中"暴露故障，整整两版没人看见。断言必须服务端可判、每次进服必跑）
+
+        //    (a) F1 暴露名→真名映射：四个重名 status 在 LLM 侧叫 sense_status 等（下划线前缀），
+        //        执行面 switch 的却是 status——映射断了就是"清单里看得见、一调用就失败"
+        if (SnowLeopardMod.core() != null) {
+            String r1 = io.github.piwugu.snowleopard.host.AiHost.realNameOf("sense_status");
+            String r2 = io.github.piwugu.snowleopard.host.AiHost.realNameOf("entity_self_status");
+            String r3 = io.github.piwugu.snowleopard.host.AiHost.realNameOf("view_status");
+            String r4 = io.github.piwugu.snowleopard.host.AiHost.realNameOf("interact_status");
+            String r5 = io.github.piwugu.snowleopard.host.AiHost.realNameOf("goto");
+            boolean f1 = "status".equals(r1) && "status".equals(r2) && "status".equals(r3)
+                    && "status".equals(r4) && "goto".equals(r5);
+            ok("F1 暴露名→真名映射（status 四兄弟可见且可用）", f1,
+                    "sense_status→" + r1 + " · entity_self_status→" + r2 + " · view_status→" + r3
+                            + " · interact_status→" + r4 + " · goto→" + r5);
+        }
+
+        //    (b) craft 余料按 count 退：蜂蜜瓶×2 → 糖×6 + 玻璃瓶×2 回包
+        //        （1.9.3 之前余料只在循环外算一次，count=2 只退 1 只瓶）
+        if (avatar instanceof io.github.piwugu.snowleopard.tools.PackCarrier pcRem) {
+            var pack = pcRem.pack();
+            pack.setItem(2, new net.minecraft.world.item.ItemStack(
+                    net.minecraft.world.item.Items.HONEY_BOTTLE, 1));
+            pack.setItem(3, new net.minecraft.world.item.ItemStack(
+                    net.minecraft.world.item.Items.HONEY_BOTTLE, 1));
+            Result cr = EntityToolsRuntime.dispatch(model, "craft", "craft",
+                    Map.of("recipe_id", "minecraft:sugar_from_honey_bottle", "count", "2"));
+            int sugar = 0;
+            int bottle = 0;
+            int honey = 0;
+            for (int i = 0; i < pack.getContainerSize(); i++) {
+                var s = pack.getItem(i);
+                if (s.is(net.minecraft.world.item.Items.SUGAR)) {
+                    sugar += s.getCount();
+                }
+                if (s.is(net.minecraft.world.item.Items.GLASS_BOTTLE)) {
+                    bottle += s.getCount();
+                }
+                if (s.is(net.minecraft.world.item.Items.HONEY_BOTTLE)) {
+                    honey += s.getCount();
+                }
+            }
+            ok("craft 余料按 count 退（蜂蜜瓶×2 → 玻璃瓶×2 回包）",
+                    cr instanceof Result.Ok && sugar == 6 && bottle == 2 && honey == 0,
+                    brief(cr) + " · 糖=" + sugar + " 玻璃瓶=" + bottle + " 蜂蜜瓶剩=" + honey);
+            // 清场：合成产物撤掉，把九格还给后续流程
+            for (int i = 0; i < pack.getContainerSize(); i++) {
+                var s = pack.getItem(i);
+                if (s.is(net.minecraft.world.item.Items.SUGAR)
+                        || s.is(net.minecraft.world.item.Items.GLASS_BOTTLE)
+                        || s.is(net.minecraft.world.item.Items.HONEY_BOTTLE)) {
+                    pack.setItem(i, net.minecraft.world.item.ItemStack.EMPTY);
+                }
+            }
+        }
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {
