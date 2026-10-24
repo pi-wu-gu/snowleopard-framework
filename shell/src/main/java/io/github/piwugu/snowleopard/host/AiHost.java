@@ -156,21 +156,30 @@ public final class AiHost {
             SnowLeopardMod.LOG.warn("[雪豹框架][host] {} 会话开不了（在运行/锁冲突）——请求留在 pending", model);
             return;
         }
+        MemoryRecorder.Scope rec = MemoryRecorder.begin(core, model);
         try {
-            String outcome = converse(core, model, req);
+            String outcome = converse(core, model, req, rec);
             core.wake().complete(req.reqId(), true, outcome);
             SnowLeopardMod.LOG.info("[雪豹框架][host] 会话完成 {} ← {}（{}）", model, req.from(), outcome);
+            Result mem = rec.finish();
+            if (mem != null && !(mem instanceof Result.Ok)) {
+                SnowLeopardMod.LOG.warn("[雪豹框架][记忆] {} 本轮压缩未完成（原始记录已在）: {}", model, mem);
+            }
         } catch (Exception e) {
             SnowLeopardMod.LOG.error("[雪豹框架][host] 会话失败 {} ← {}: {}",
                     model, req.from(), e.getMessage(), e);
+            // 失败也留一条原始记录：排障时要能回看"它当时在干什么"，但只记原因不记堆栈
+            rec.note("会话失败: " + e.getMessage());
+            rec.finish();
             core.wake().complete(req.reqId(), false, String.valueOf(e.getMessage()));
         } finally {
             WakeBridge.endSession(model);
         }
     }
 
-    /** 一轮完整会话：装配 → 工具循环 → 收尾。返回结果摘要。 */
-    private static String converse(SnowLeopard core, String model, WakeStore.Request req) {
+    /** 一轮完整会话：装配 → 工具循环 → 收尾。返回结果摘要。{@code rec} 负责把这一轮记进记忆。 */
+    private static String converse(SnowLeopard core, String model, WakeStore.Request req,
+                                   MemoryRecorder.Scope rec) {
         // ① 装配上下文（注入块与提醒行同 M12 来源，host 只是"塞进上下文的角色"）
         ChatInbox.Pulled pulled = ChatRuntime.pull(model, 20);
         String turnLine = WakeBridge.turnLine(model);
@@ -190,6 +199,7 @@ public final class AiHost {
         Map<String, Object> userMsg = Map.of("role", "user", "content", user.toString());
         messages.add(userMsg);
         store.append(model, userMsg);
+        rec.user(user.toString());
 
         // ② 工具循环
         List<Map<String, Object>> tools = toolSchemas(core);
@@ -198,6 +208,7 @@ public final class AiHost {
             Map<String, Object> assistant = client.chat(model, messages, tools);
             store.append(model, assistant);
             messages.add(assistant);
+            rec.model(str(assistant.get("content")));
             Object calls = assistant.get("tool_calls");
             if (!(calls instanceof List<?> callList) || callList.isEmpty()) {
                 finalText = String.valueOf(assistant.get("content"));
@@ -205,6 +216,10 @@ public final class AiHost {
             }
             for (Object o : callList) {
                 String result = executeTool(core, model, o);
+                // 记录时按 callObj 取名字/参数——executeTool 内部已解析过一遍，但那里没有返回值，
+                // 复制解析成本极低，且能保证"记录的就是实际派发的那个调用"
+                Map<?, ?> fn = (Map<?, ?>) ((Map<?, ?>) o).get("function");
+                rec.tool(str(fn.get("name")), str(fn.get("arguments")), result);
                 Map<String, Object> toolMsg = new LinkedHashMap<>();
                 toolMsg.put("role", "tool");
                 toolMsg.put("tool_call_id", str(((Map<?, ?>) o).get("id")));
@@ -214,6 +229,7 @@ public final class AiHost {
             }
             if (round == maxRounds) {
                 finalText = "（轮次预算 " + maxRounds + " 耗尽，强制收束）";
+                rec.note(finalText);
             }
         }
 

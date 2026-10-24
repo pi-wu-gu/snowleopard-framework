@@ -359,6 +359,52 @@ final class ClientSmokeTest {
                     chestThere && potionsOk, potionDetail);
         }
 
+        //    (i) 记忆写侧接线（v1.11.0）：一轮落盘 + 工具大结果被筛掉 + 触发轮压缩
+        //        用独立 ID（memprobe）——不污染 clienttest 自己的记忆；断言后也不清（原始记录是基线）
+        var memCore = SnowLeopardMod.core();
+        if (memCore != null) {
+            String probe = "memprobe";
+            var rec = io.github.piwugu.snowleopard.host.MemoryRecorder.begin(memCore, probe);
+            rec.user("验收：写一轮记忆");
+            rec.model("好的，照做。");
+            StringBuilder huge = new StringBuilder("Ok: [");
+            for (int i = 0; i < 800; i++) {
+                huge.append("{\"id\":\"").append(i).append("\",\"name\":\"实体").append(i).append("\"},");
+            }
+            huge.append("]");
+            rec.tool("sense_query", "{\"what\":\"entities\"}", huge.toString());
+            rec.tool("world_blocks", "{}", huge.toString());
+            snowleopard.core.result.Result memRes = rec.finish();
+
+            var ids = memCore.ids();
+            var caller = new snowleopard.core.ids.Ids.Caller(probe);
+            var rawDir = ids.resolve(caller, "memory-raw");
+            boolean roundFile = false;
+            boolean squeezedMark = false;
+            long roundBytes = 0;
+            try (var files = java.nio.file.Files.list(rawDir)) {
+                var first = files.filter(p -> p.getFileName().toString().startsWith("round-"))
+                        .findFirst().orElse(null);
+                if (first != null) {
+                    roundFile = true;
+                    roundBytes = java.nio.file.Files.size(first);
+                    squeezedMark = java.nio.file.Files.readString(first,
+                            java.nio.charset.StandardCharsets.UTF_8).contains("…(原 ");
+                }
+            } catch (Exception ignored) {
+                // 目录不存在等情况按失败处理（roundFile 保持 false）
+            }
+            // 大结果 2 × 约 18KB → 必须被压到几百字符：整轮文件远小于 8KB
+            var dayMemo = ids.resolve(caller, "memory/days/"
+                    + snowleopard.core.memory.RawLog.dayOf(System.currentTimeMillis()) + "/memo.md");
+            boolean dayOk = !(memRes instanceof snowleopard.core.result.Result.Ok)
+                    || java.nio.file.Files.exists(dayMemo);   // Ok 就必须真产出天档
+            ok("记忆写侧接线（一轮落盘 + 工具大结果被筛掉 + 触发压缩）",
+                    roundFile && squeezedMark && roundBytes > 0 && roundBytes < 8000 && dayOk,
+                    "轮文件=" + roundFile + " · " + roundBytes + "B · 裁剪标记=" + squeezedMark
+                            + " · 压缩=" + (memRes == null ? "null" : memRes));
+        }
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {
