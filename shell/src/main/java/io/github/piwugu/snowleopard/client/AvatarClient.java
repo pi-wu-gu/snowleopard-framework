@@ -102,9 +102,11 @@ public final class AvatarClient {
                                  net.minecraft.client.renderer.MultiBufferSource buffer,
                                  int packedLight, int packedOverlay) {
             poseStack.pushPose();
-            // 抵消 BatModel body/head 根偏移（y=17 起，整体重心 ≈19/16）→ 模型中心到原点
-            poseStack.translate(0.0, 1.1875, 0.0);
-            poseStack.scale(0.45F, 0.45F, 0.45F);   // 物品格 16px；不缩放必爆格
+            // v1.10.2 顺序有讲究：scale 先、translate 后（后调用的先作用于顶点——
+            // 要"先对中、再整体缩放"，translate 的量才能不被 scale 乘歪）。
+            // 转轴后模型占据 z'∈[14,24]（原 y 范围），所以对中量作用在 z 上：−19/16。
+            poseStack.scale(0.6F, 0.6F, 0.6F);   // v1.10.2：0.45 → 0.6（用户真机裁决"放大三分之一"）
+            poseStack.translate(0.0F, 0.0F, -1.1875F);
             spreadWings();
             model.renderToBuffer(poseStack,
                     buffer.getBuffer(net.minecraft.client.renderer.RenderType.entityCutoutNoCull(TEXTURE)),
@@ -112,12 +114,20 @@ public final class AvatarClient {
             poseStack.popPose();
         }
 
-        /** 手摆平飞姿态：dummy 不 tick、AnimationState 不启动，只能直接转部件（§2.2）。 */
+        /**
+         * 手摆平飞姿态：dummy 不 tick、AnimationState 不启动，只能直接转部件（§2.2）。
+         *
+         * <p><b>v1.10.2（真机裁决"模型是倒着的"）</b>：BatModel 建模默认就是倒挂姿态
+         * （body 从 y=17 向下延伸到 24，head 在 y=14..17——竖直、头在上、脚在下），
+         * 上版只摆了翅膀没转身体。这里把 root 绕 X 转 +90°：y'=-z、z'=+y → 身体转成水平、
+         * 头（y=14..17）落在 +z 端（朝观察者）、翅膀仍在 ±x 水平面展开——俯视平飞蝙蝠。
+         * 旋转绕 root 原点，模型 y 全为正（14..24）→ 转后整体在 z'=14..24，
+         * 由 poseStack 的 translate(0,0,-19/16) 对中，不会甩出格。
+         */
         private void spreadWings() {
             model.root().getAllParts().forEach(net.minecraft.client.model.geom.ModelPart::resetPose);
+            model.root().xRot = (float) (Math.PI / 2);
             var body = model.root().getChild("body");
-            var head = model.root().getChild("head");
-            head.xRot = -0.6F;   // 头微抬（物品看着"朝上"，倒挂默认头朝下不好认）
             body.getChild("right_wing").zRot = (float) (Math.PI / 4);
             body.getChild("left_wing").zRot = -(float) (Math.PI / 4);
             body.getChild("right_wing").getChild("right_wing_tip").zRot = (float) (Math.PI / 8);

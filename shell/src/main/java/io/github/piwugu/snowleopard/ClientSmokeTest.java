@@ -301,6 +301,34 @@ final class ClientSmokeTest {
             carrier.setPickupFilter("");
         }
 
+        //    (g) 玩家右键抓蝙蝠（v1.10.2 用户真机裁决：抓不该只是模型的能力）。
+        //        tryCapture 本体双端可跑，这里在服务端直接调——断言"蝙蝠消失+物品真进玩家背包"，
+        //        随后立即清场（从背包移除），不把自测赠品留给真实会话。
+        var grabBat = net.minecraft.world.entity.EntityType.BAT.create(level);
+        if (grabBat != null) {
+            grabBat.setPos(player.getX() + 2.0, player.getY() + 1.0, player.getZ());
+            grabBat.setPersistenceRequired();
+            level.addFreshEntity(grabBat);
+            int before = player.getInventory().items.stream()
+                    .filter(s -> s.is(io.github.piwugu.snowleopard.item.BatItems.BAT.get()))
+                    .mapToInt(net.minecraft.world.item.ItemStack::getCount).sum();
+            boolean grabbed = PlayerBatCapture.tryCapture(player, grabBat);
+            int after = player.getInventory().items.stream()
+                    .filter(s -> s.is(io.github.piwugu.snowleopard.item.BatItems.BAT.get()))
+                    .mapToInt(net.minecraft.world.item.ItemStack::getCount).sum();
+            ok("玩家空手右键抓蝙蝠（tryCapture：蝙蝠消失+物品进背包）",
+                    grabbed && !grabBat.isAlive() && after == before + 1,
+                    "grabbed=" + grabbed + " · 蝙蝠存活=" + grabBat.isAlive()
+                            + " · 背包蝙蝠数 " + before + "→" + after);
+            // 清场：移除刚塞进背包的蝙蝠物品（自测不留赠品）
+            for (int i = 0; i < player.getInventory().items.size(); i++) {
+                if (player.getInventory().items.get(i)
+                        .is(io.github.piwugu.snowleopard.item.BatItems.BAT.get())) {
+                    player.getInventory().items.set(i, net.minecraft.world.item.ItemStack.EMPTY);
+                }
+            }
+        }
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {

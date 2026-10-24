@@ -135,6 +135,8 @@ public final class SnowLeopardMod {
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(AvatarWake::onServerTick);
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(
                     net.neoforged.bus.api.EventPriority.LOWEST, true, AvatarWake::onDeath);
+            // 玩家右键抓蝙蝠（v1.10.2）：空手右键活蝙蝠 → snowleopard:bat 进玩家背包
+            net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(PlayerBatCapture::onEntityInteract);
             // 客户端验收模式（-Dsnowleopard.clienttest=true）：只跑"绑定中立生物 + 推送一行"。
             // 全量自测收尾会 server.halt(false)，在集成服务器上等于把客户端关掉，所以必须分道
             if (Boolean.getBoolean("snowleopard.clienttest")) {
