@@ -252,7 +252,7 @@ final class ClientSmokeTest {
                         Map.of("target", bat.getStringUUID()));
                 for (int i = 0; i < carrier.pack().getContainerSize(); i++) {
                     if (carrier.pack().getItem(i).is(
-                            io.github.piwugu.snowleopard.mc.BatItems.BAT.get())) {
+                            io.github.piwugu.snowleopard.item.BatItems.BAT.get())) {
                         hadBat = true;
                     }
                 }

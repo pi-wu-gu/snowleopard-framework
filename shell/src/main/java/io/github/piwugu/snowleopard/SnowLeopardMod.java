@@ -93,7 +93,7 @@ public final class SnowLeopardMod {
             // 载体（M13）：实体注册（mod 总线）+ 唤醒源（互动/定时/提及）
             AvatarEntities.register(container.getEventBus());
             // 蝙蝠物品（v1.10.0）：capture 入包/放走/吃掉——注册住 entitytools（工具层），渲染在客户端
-            io.github.piwugu.snowleopard.mc.BatItems.register(container.getEventBus());
+            io.github.piwugu.snowleopard.item.BatItems.register(container.getEventBus());
             AvatarWake.init(gameDir, core);
             // AI 执行端（host 层）：轮询 + 会话 + 工具循环——只在客户端验收模式启用
             // （全量自测要自己数 pending，host 抢跑会造成假失败）

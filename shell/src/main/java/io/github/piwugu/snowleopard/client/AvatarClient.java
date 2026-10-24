@@ -43,7 +43,7 @@ public final class AvatarClient {
             public net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer getCustomRenderer() {
                 return BatItemRenderer.INSTANCE;
             }
-        }, io.github.piwugu.snowleopard.mc.BatItems.BAT.get());
+        }, io.github.piwugu.snowleopard.item.BatItems.BAT.get());
     }
 
     /** 渲染器本体（贴图原版、零新资源）。 */

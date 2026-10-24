@@ -1,4 +1,4 @@
-package io.github.piwugu.snowleopard.mc;
+package io.github.piwugu.snowleopard.item;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;

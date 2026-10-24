@@ -1114,7 +1114,11 @@ public final class EntityToolsModule {
             return Result.error("目标太远（" + String.format("%.1f", self.distanceTo(bat))
                     + " 格 > " + CAPTURE_REACH + "）——先 goto 走近");
         }
-        var rest = insertIntoPack(carrier.pack(), BatItem.stackOf());
+        var batStack = batStack();
+        if (batStack.isEmpty()) {
+            return Result.error("snowleopard:bat 物品未注册（安装损坏——蝙蝠物品注册在 shell 侧）");
+        }
+        var rest = insertIntoPack(carrier.pack(), batStack);
         if (!rest.isEmpty()) {
             return Result.error("随身包已满——捕获取消（蝙蝠还在原地，drop 或 move_item 腾槽后再来）");
         }
@@ -1123,7 +1127,28 @@ public final class EntityToolsModule {
                 net.minecraft.sounds.SoundEvents.BAT_TAKEOFF,
                 net.minecraft.sounds.SoundSource.PLAYERS, 0.7F, 0.8F);
         bat.discard();
-        return Result.ok(Map.of("ok", true, "item", BatItem.REGISTRY_NAME, "count", 1));
+        return Result.ok(Map.of("ok", true, "item", BAT_ITEM_ID, "count", 1));
+    }
+
+    /** 蝙蝠物品 registry id（权威注册在 shell 的 item/BatItems；这里只认 id，构造期零 MC 触达）。 */
+    public static final String BAT_ITEM_ID = "snowleopard:bat";
+
+    /**
+     * 运行期按 registry id 取蝙蝠物品（v1.10.1 真机崩溃教训 18:58 (UTC+8)）：
+     * v1.10.0 直接引用 shell 侧不可能——依赖方向反了；直接引用 entitytools 自己的注册类又会在
+     * mod 构造期（PLUGIN 层无 minecraft reads）IllegalAccessError 崩客户端。
+     * 所以注册住 shell、这里运行期查注册表——游戏期 FML 已放行 reads（1.9.x 运行期工具实证）。
+     */
+    static net.minecraft.world.item.ItemStack batStack() {
+        var rl = net.minecraft.resources.ResourceLocation.parse(BAT_ITEM_ID);
+        if (!net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(rl)) {
+            return net.minecraft.world.item.ItemStack.EMPTY;
+        }
+        var it = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(rl);
+        if (it == null || it == net.minecraft.world.item.Items.AIR) {
+            return net.minecraft.world.item.ItemStack.EMPTY;
+        }
+        return new net.minecraft.world.item.ItemStack(it);
     }
 
     /** 主动拾取：扫描半径内按距离由近到远收取；触达外/包满如实报 skipped（不隔空取物）。 */
