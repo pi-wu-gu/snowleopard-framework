@@ -102,6 +102,19 @@ public final class AvatarClient {
                                  net.minecraft.client.renderer.MultiBufferSource buffer,
                                  int packedLight, int packedOverlay) {
             poseStack.pushPose();
+            // v1.10.3（真机裁决"蝙蝠面向玩家前方"）：平飞姿态里头朝局部 +z——
+            // 第三人称手持时局部 +z = 玩家面朝方向，看上去"头朝前飞的标本"不对劲；
+            // 掉落物/展示框同理。这三个 context 里再绕 X 转 −90°（头 (0,0,1)→(0,1,0)）
+            // 变立式拎蝙蝠（头朝上）；GUI 和第一人称保持平飞（第一人称头朝视向自然，
+            // GUI 斜视角 [20,-40,0] 也认得出来）。
+            // 变换链顺序：mulPose 最先调用=最后作用于顶点（最外层）——先对中、再缩放、
+            // 最后立式，转完模型仍以原点为中心，不会甩出格。
+            if (displayContext == net.minecraft.world.item.ItemDisplayContext.THIRD_PERSON_RIGHT_HAND
+                    || displayContext == net.minecraft.world.item.ItemDisplayContext.THIRD_PERSON_LEFT_HAND
+                    || displayContext == net.minecraft.world.item.ItemDisplayContext.FIXED
+                    || displayContext == net.minecraft.world.item.ItemDisplayContext.GROUND) {
+                poseStack.mulPose(com.mojang.math.Axis.XP.rotationDegrees(-90.0F));
+            }
             // v1.10.2 顺序有讲究：scale 先、translate 后（后调用的先作用于顶点——
             // 要"先对中、再整体缩放"，translate 的量才能不被 scale 乘歪）。
             // 转轴后模型占据 z'∈[14,24]（原 y 范围），所以对中量作用在 z 上：−19/16。
