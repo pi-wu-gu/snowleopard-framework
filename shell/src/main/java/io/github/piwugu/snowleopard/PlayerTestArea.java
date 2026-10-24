@@ -87,6 +87,53 @@ public final class PlayerTestArea {
         return level.getMinBuildHeight() + FLOOR_RISE;
     }
 
+    /** 治疗药水箱相对锚点的偏移（地板层角落，v1.10.5 用户要求）。 */
+    private static final int CHEST_DX = 2;
+    private static final int CHEST_DZ = 2;
+
+    /** 药水箱坐标（未构建过测试区时返回 null；自测断言用）。 */
+    public static net.minecraft.core.BlockPos potionChestPos() {
+        return floorY == Integer.MIN_VALUE ? null
+                : new net.minecraft.core.BlockPos(BASE_X + CHEST_DX, floorY + 1, BASE_Z + CHEST_DZ);
+    }
+
+    /**
+     * 一箱投掷型（喷溅）治疗药水（v1.10.5，2026-10-24 20:12 (UTC+8)）。
+     *
+     * <p><b>幂等且不伤人</b>：位置已是箱子（玩家取用过/改过）→ 一律不动；位置被别的方块占
+     * （玩家建筑）→ 不覆盖；只有"空位"才放箱子并塞 27 瓶。药水不可堆叠（stacksTo 1），
+     * 所以一格一瓶。数据走 1.21.1 的 POTION_CONTENTS 组件，不是旧 NBT。
+     */
+    private static void ensurePotionChest(ServerLevel level, int y) {
+        // 箱子占地板**上方**一格（地板层本身是平滑石/石英，v1.10.5 首轮放到地板层被占位跳过）
+        net.minecraft.core.BlockPos pos = new net.minecraft.core.BlockPos(BASE_X + CHEST_DX, y + 1, BASE_Z + CHEST_DZ);
+        // ServerStarted 时远处区块还没加载，isLoaded 会静默 false（v1.10.5 首轮就踩到：
+        // 日志只说"已存在跳过"，箱子根本没放）。先强制取一次区块再判。
+        level.getChunkAt(pos);
+        var state = level.getBlockState(pos);
+        if (state.is(Blocks.CHEST)) {
+            return;   // 已经有箱子（可能玩家取用/整理过）——不重置，别把玩家东西吞了
+        }
+        if (!state.isAir()) {
+            SnowLeopardMod.LOG.info("[雪豹框架][测试区] 药水箱位置被 {} 占着，跳过放置", state.getBlock());
+            return;
+        }
+        level.setBlock(pos, Blocks.CHEST.defaultBlockState(), 3);
+        if (level.getBlockEntity(pos)
+                instanceof net.minecraft.world.level.block.entity.ChestBlockEntity chest) {
+            var stack = net.minecraft.world.item.alchemy.PotionContents.createItemStack(
+                    net.minecraft.world.item.Items.SPLASH_POTION,
+                    net.minecraft.world.item.alchemy.Potions.HEALING);
+            for (int i = 0; i < 27; i++) {
+                chest.setItem(i, stack.copy());
+            }
+            chest.setChanged();
+            // 打 pos.getY() 而不是入参 y：箱子在地板上方一格，打 y 会少 1（日志不实招过祸）
+            SnowLeopardMod.LOG.info("[雪豹框架][测试区] 投掷型治疗药水 ×27 已放入箱子 "
+                    + "x={} y={} z={}（喷溅·瞬间治疗）", pos.getX(), pos.getY(), pos.getZ());
+        }
+    }
+
     /**
      * 幂等构建：记录存在 + 记录的 y 就是当前锚点 + 标记块（只验**已加载**区块）都对 → 跳过；
      * 否则清场后在**固定锚点**重建（不重算高度图，见 {@link #FLOOR_RISE}）。
@@ -104,6 +151,7 @@ public final class PlayerTestArea {
                         .get("floorY")).intValue();
                 if (recorded == y && markersOk(level, y)) {
                     floorY = y;
+                    ensurePotionChest(level, y);   // 已建好的老世界也要补（幂等）
                     SnowLeopardMod.LOG.info("[雪豹框架][测试区] 已存在，跳过（地板 y={}）", y);
                     return;
                 }
@@ -116,6 +164,7 @@ public final class PlayerTestArea {
 
         build(level, y);
         floorY = y;
+        ensurePotionChest(level, y);
         if (record != null) {
             try {
                 Files.createDirectories(record.getParent());

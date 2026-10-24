@@ -329,6 +329,36 @@ final class ClientSmokeTest {
             }
         }
 
+        //    (h) 测试区治疗药水箱（v1.10.5 用户要求）：箱子在 + 装的是喷溅·瞬间治疗
+        var potionChest = PlayerTestArea.potionChestPos();
+        if (potionChest != null) {
+            boolean chestThere = level.getBlockState(potionChest)
+                    .is(net.minecraft.world.level.block.Blocks.CHEST);
+            boolean potionsOk = false;
+            String potionDetail = "无方块实体/不是箱子";
+            if (level.getBlockEntity(potionChest)
+                    instanceof net.minecraft.world.level.block.entity.ChestBlockEntity chest) {
+                int filled = 0;
+                boolean allHealing = true;
+                for (int i = 0; i < chest.getContainerSize(); i++) {
+                    var st = chest.getItem(i);
+                    if (st.isEmpty()) {
+                        continue;
+                    }
+                    filled++;
+                    var contents = st.get(net.minecraft.core.component.DataComponents.POTION_CONTENTS);
+                    boolean isHealing = contents != null && contents.potion()
+                            .map(h -> h.value() == net.minecraft.world.item.alchemy.Potions.HEALING.value())
+                            .orElse(false);
+                    allHealing &= st.is(net.minecraft.world.item.Items.SPLASH_POTION) && isHealing;
+                }
+                potionsOk = filled >= 20 && allHealing;
+                potionDetail = "箱内 " + filled + " 格有物品 · 全是喷溅治疗=" + allHealing;
+            }
+            ok("测试区有一箱投掷型治疗药水（喷溅·瞬间治疗）",
+                    chestThere && potionsOk, potionDetail);
+        }
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {
