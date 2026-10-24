@@ -92,8 +92,8 @@ public final class BuiltinRuntime {
         }
     }
 
-    /** 已知模型（有句柄的）；聊天栏巡检按它遍历。 */
-    public static java.util.Set<String> knownCallers() {
-        return java.util.Set.copyOf(SCOPES.keySet());
-    }
+    // **这里以前有个 knownCallers()（句柄缓存的 keySet），已被移除**（2026-10-24 05:45 (UTC+8)）：
+    // 三处消费（提及候选/推送巡检/游标 ensure）都拿它当"已知模型"，可它只反映"谁调用过内置工具"，
+    // 于是没调过的模型永不在册、@它唤不醒。已知模型的唯一来源是 ModelRegistry——
+    // 句柄缓存是执行面副产品，**不许再拿它当注册表**（同一职责两份实现必然漂移，且不报错）。
 }

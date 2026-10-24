@@ -23,8 +23,11 @@ import snowleopard.core.registry.ToolRegistry;
 import snowleopard.core.result.Result;
 import snowleopard.core.wake.WakeStore;
 
+import io.github.piwugu.snowleopard.AvatarWake;
 import io.github.piwugu.snowleopard.ChatRuntime;
 import io.github.piwugu.snowleopard.EntityToolsRuntime;
+import io.github.piwugu.snowleopard.ModelRegistry;
+import io.github.piwugu.snowleopard.PlayerTestArea;
 import io.github.piwugu.snowleopard.SnowLeopardMod;
 import io.github.piwugu.snowleopard.WakeBridge;
 import io.github.piwugu.snowleopard.tools.chat.ChatInbox;
@@ -146,6 +149,9 @@ public final class AiHost {
 
     private static void runSession(SnowLeopard core, WakeStore.Request req) {
         String model = req.to();
+        // 登记点之一：有人叫它 = 它存在。登记放在会话之外——会话可能开场就失败，
+        // 但"被叫过一次"这件事不因失败而消失（否则下一次点名它还是不在册）
+        ModelRegistry.register(model);
         if (!WakeBridge.beginSession(model)) {
             SnowLeopardMod.LOG.warn("[雪豹框架][host] {} 会话开不了（在运行/锁冲突）——请求留在 pending", model);
             return;
@@ -230,6 +236,10 @@ public final class AiHost {
         if (entry == null) {
             return "Error: 未知工具 " + name + "（清单里没有）";
         }
+        // **暴露名只用于"对外清单的键"，进执行面的必须是注册真名**（2026-10-24 05:20 (UTC+8)）：
+        // 重名工具在 LLM 侧叫 sense_status，执行面 switch 的却是 status——把暴露名传下去会落到
+        // default 分支报"XX 组无此工具"，四个 status 就成了"清单里看得见、一调用就失败"。
+        // 这也是"暴露名与 usage 字符串同形"的反面：两处口径分家，转换只在这一个地方做。
         ToolRegistry.Tool tool = entry.tool();
         Map<String, Object> params;
         try {
@@ -238,7 +248,7 @@ public final class AiHost {
         } catch (RuntimeException e) {
             return "Error: 工具参数不是合法 JSON: " + e.getMessage();
         }
-        Result r = dispatchOnServer(model, entry.group(), name, params);
+        Result r = dispatchOnServer(model, entry.group(), tool.name(), params);
         return switch (r) {
             case Result.Ok o -> "Ok: " + o.data();
             case Result.Warn w -> "Warn: " + w.data() + "（" + w.desc() + "）";
@@ -249,6 +259,10 @@ public final class AiHost {
 
     /** 工具名 → (组短名, 工具)。重名工具跳过后者（清单构建时记 WARN）。 */
     private static final Map<String, Entry> TOOLS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** usage 里的调用签名前缀（如 {@code sense.status(}）——换成暴露名后模型才不会叫错。 */
+    private static final java.util.regex.Pattern CALL_SIG =
+            java.util.regex.Pattern.compile("^[A-Za-z_][A-Za-z0-9_.]*\\(");
 
     private record Entry(String group, ToolRegistry.Tool tool) {
     }
@@ -285,6 +299,23 @@ public final class AiHost {
         SnowLeopardMod.LOG.info("[雪豹框架][host] 工具清单 {} 个（重名已带组前缀）", TOOLS.size());
     }
 
+    /**
+     * 暴露名 → 注册真名（自检用）。返回 null = 该名字不在清单里。
+     *
+     * <p>这条是给验收断言用的**唯一对外缝**：LLM 侧叫 {@code sense_status}，执行面只认 {@code status}，
+     * 两边由 {@link #executeTool} 在调用时换。没有这条缝，"暴露名被直接发到执行面"这种故障
+     * 只能等模型碰巧去调那四个工具才暴露（1.8.2→1.9.2 整整两版没人看见）。
+     */
+    public static String realNameOf(String exposed) {
+        SnowLeopard core = SnowLeopardMod.core();
+        if (core == null || exposed == null) {
+            return null;
+        }
+        buildToolIndex(core);
+        Entry e = TOOLS.get(exposed);
+        return e == null ? null : e.tool().name();
+    }
+
     /** OpenAI 工具清单（由注册表生成；params 的扁平"参数名→说明"形状转成 JSON Schema）。 */
     private static List<Map<String, Object>> toolSchemas(SnowLeopard core) {
         buildToolIndex(core);
@@ -313,10 +344,16 @@ public final class AiHost {
             if (!required.isEmpty()) {
                 parameters.put("required", required);
             }
+            // **描述里的调用签名必须与暴露名同形**（否则模型按 "sense.status()" 学到名字，
+            // 调出来的却是 sense_status / status 两种之一，两边都对不上——2026-10-24 05:20 (UTC+8)）：
+            // usage 是给人看的 DSML（sense.status()），暴露名是给 API 的键（sense_status），
+            // 这里把签名前缀统一换成暴露名，**转换只此一处**，执行面仍只认注册真名。
+            String usage = e.tool().usage() == null ? "" : CALL_SIG.matcher(e.tool().usage())
+                    .replaceFirst(ee.getKey() + "(");
             out.add(Map.of("type", "function", "function", Map.of(
                     "name", ee.getKey(),
-                    "description", e.tool().summary() == null ? e.tool().usage()
-                            : e.tool().summary() + "（" + e.tool().usage() + "）",
+                    "description", e.tool().summary() == null ? usage
+                            : e.tool().summary() + "（" + usage + "）",
                     "parameters", parameters)));
         }
         return out;
@@ -363,15 +400,25 @@ public final class AiHost {
         if (!name.equals(model)) {
             b.append("，对外名称是「").append(name).append("」");
         }
-        b.append("。你的载体是一只名为「").append(name).append("」的豹猫外化身。\n");
+        // **世界事实只读权威，不写死**（2026-10-24 05:35 (UTC+8)）：
+        // 这里原来硬编码"玩家测试区 … 地板 y=-64"，而实际记录是 -57、模型脚下是 -63——
+        // 三处没有一个是对的。硬编码世界常量等于给模型喂假事实，它照着挖就会挖到虚空。
+        String area = PlayerTestArea.describe();
+        String areaLine = area == null
+                ? "- 玩家测试区尚未建好（问位置时以你自己的坐标为准，别猜）。"
+                : "- " + area + "。";
+        // 载体也不是"一定有一只豹猫"：没绑定就不许说有（否则模型会去找一只不存在的身体）
+        b.append(AvatarWake.hasPrimary(model)
+                ? "。你的载体是一只名为「" + name + "」的豹猫外化身。\n"
+                : "。你当前没有绑定载体，无法移动与破坏（让操作生效需要先让人帮你绑定载体）。\n");
         b.append("""
                 行为准则：
                 - 要对人说话时用 chat_send（会带 [雪豹·%s] 前缀显示在聊天栏）；一次说清，不要刷屏。
                 - 工具调用返回的 Ok/Warn/Severe/Error 是真实结果，不要编造工具输出。
                 - 收到"提醒"行里的未读/提及是给你的信号；处理完本轮就自然结束（不再调用工具即结束）。
-                - 玩家测试区在 x 128..159、z 128..159（地板 y=-64）。
+                %s
                 - 保持简短自然，像世界里的一个角色，不是客服机器人。
-                """.formatted(name));
+                """.formatted(name, areaLine));
         return b.toString();
     }
 

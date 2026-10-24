@@ -148,6 +148,72 @@ final class ClientSmokeTest {
             ChatPush.push(area);
         }
 
+        // ⑨ 破坏 + 掉落：**"测试区下面是虚空"的直接断言**（用户 2026-10-24 04:22 提的这条，
+        //    04:33 那轮真机上并没真的验到——AI 站在被埋的旧区，掉落物掉到 y=-65.6 穿过地板进了虚空，
+        //    而它自己回报的是 ✅。所以这里由服务端自己做一遍，不靠模型自述）
+        //    做法：挖穿地板一格 → 让掉落物真落下去 → 1.2 秒后看它停在哪。
+        //    停在地板那一层（垫层基岩的顶上）才是"下面不是虚空"；掉个没完就是垫层没生效。
+        int floorY = PlayerTestArea.floorLevel();
+        if (floorY != Integer.MIN_VALUE) {
+            BlockPos hole = new BlockPos(anchor.getX() + 5, floorY, anchor.getZ() + 5);
+            net.minecraft.world.level.block.state.BlockState solid = level.getBlockState(hole);
+            // 垫层逐层是基岩（静态、可当场判定）
+            boolean cushion = true;
+            StringBuilder cushionDetail = new StringBuilder("垫层");
+            for (int b = 1; b <= PlayerTestArea.bedrockLayers(); b++) {
+                boolean isBedrock = level.getBlockState(
+                        new BlockPos(hole.getX(), floorY - b, hole.getZ()))
+                        .is(net.minecraft.world.level.block.Blocks.BEDROCK);
+                cushion &= isBedrock;
+                cushionDetail.append(" y-").append(b).append("=").append(isBedrock ? "基岩" : "非基岩");
+            }
+            ok("地板下已垫基岩（挖穿也不掉虚空）", cushion, cushionDetail.toString());
+
+            net.minecraft.world.level.block.entity.BlockEntity beBefore =
+                    solid.hasBlockEntity() ? level.getBlockEntity(hole) : null;
+            level.removeBlock(hole, false);
+            net.minecraft.world.level.block.Block.dropResources(solid, level, hole, beBefore, null,
+                    new net.minecraft.world.item.ItemStack(
+                            net.minecraft.world.item.Items.DIAMOND_PICKAXE));
+            final int expectFloorY = floorY;
+            final BlockPos restore = hole.immutable();
+            final net.minecraft.world.level.block.state.BlockState restoreState = solid;
+            new Thread(() -> {
+                try {
+                    Thread.sleep(1200);   // 让掉落物真的落完（掉进虚空的话这一秒足够沉下去）
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                player.server.execute(() -> {
+                    double lowest = Double.MAX_VALUE;
+                    int found = 0;
+                    for (net.minecraft.world.entity.Entity e : level.getAllEntities()) {
+                        if (e instanceof net.minecraft.world.entity.item.ItemEntity item
+                                && item.position().x >= 128 && item.position().x < 160
+                                && item.position().z >= 128 && item.position().z < 160) {
+                            lowest = Math.min(lowest, item.position().y);
+                            found++;
+                        }
+                    }
+                    // 破口在地板层，掉落物停在下面那层基岩的顶上 = y 约等于 floorY；
+                    // 沉到 floorY-2 以下就是"穿了垫层"（虚空里会一路沉下去，差值是十几格，不会误判）
+                    boolean rested = found > 0 && lowest >= expectFloorY - 0.6;
+                    ok("破坏后掉落物停在地板层（没沉进虚空）", rested,
+                            "掉落物 " + found + " 个 · 最低 y=" + (found > 0 ? lowest : Double.NaN)
+                                    + " · 地板 y=" + expectFloorY);
+                    level.setBlock(restore, restoreState, 3);
+                    for (net.minecraft.world.entity.Entity e : level.getAllEntities()) {
+                        if (e instanceof net.minecraft.world.entity.item.ItemEntity
+                                && e.position().x >= 128 && e.position().x < 160
+                                && e.position().z >= 128 && e.position().z < 160) {
+                            e.discard();
+                        }
+                    }
+                });
+            }, "snowleopard-droptest").start();
+        }
+
         // ⑧ host 自检唤醒（AI 执行端 H4）：配置了 LLM 时，host 会接走这条请求、
         //    开真会话、模型自己 chat_send 向玩家问好——真机全链路的最后一块
         SnowLeopard core = SnowLeopardMod.core();
@@ -156,9 +222,10 @@ final class ClientSmokeTest {
                     new snowleopard.core.wake.WakeStore.Chain(java.util.List.of("ext-clock")),
                     "ext-clock", model,
                     "host 自检：请用 chat_send 向玩家 " + player.getGameProfile().getName()
-                            + " 打一句招呼；然后破坏你身旁任意泥土/草方块（interact_break）并查证掉落物；"
-                            + "再用背包里的原木合成木板（craft_recipes 查配方 + craft），"
-                            + "把两件事的结果一起用 chat_send 告诉玩家；然后结束本轮。",
+                            + " 打一句招呼；然后破坏你脚边的一块地板（interact_break，测试区地板只有平滑石和石英，"
+                            + "没有泥土/草方块，别去找），破完后用 world_query 确认掉落物停在地板那一层、"
+                            + "没有沉到地板下面去；再用背包里的原木合成木板（craft_recipes 查配方 + craft）；"
+                            + "把三件事的结果一起用 chat_send 告诉玩家，然后结束本轮。",
                     "host-selftest", "host-selftest-" + System.currentTimeMillis());
             ok("host 自检唤醒已登记", !(wake instanceof Result.Error), brief(wake));
         }

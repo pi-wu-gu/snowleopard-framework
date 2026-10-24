@@ -33,7 +33,8 @@ final class ChatPusher {
             return;
         }
         lastTick = now;
-        for (String caller : BuiltinRuntime.knownCallers()) {
+        // 遍历单点登记表（不是句柄缓存）：没调过内置工具的模型也要能被推到（2026-10-24 05:45 (UTC+8)）
+        for (String caller : ModelRegistry.known()) {
             // 自测与客户端验收模型都不推：它们的断言要"恰好一次"，巡检插一脚就会变成两次
             // （clienttest 还会让验收自己的 push 少掉唯一性证据，2026-10-23 23:12 补）
             if (caller.startsWith("selftest-") || caller.startsWith("clienttest")) {

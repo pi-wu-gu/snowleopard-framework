@@ -67,7 +67,13 @@ public class AvatarEntity extends PathfinderMob
         super.addAdditionalSaveData(tag);
         net.minecraft.nbt.CompoundTag pt = new net.minecraft.nbt.CompoundTag();
         for (int i = 0; i < pack.getContainerSize(); i++) {
-            pt.put("s" + i, pack.getItem(i).save(this.registryAccess()));
+            net.minecraft.world.item.ItemStack s = pack.getItem(i);
+            // **空格子不写**：`ItemStack.save` 对空格直接抛 IllegalStateException——
+            // 九格全写会在每次自动存档时炸一次（v1.9.3 修：真机上每次 saveAllChunks 都有一坨
+            // "Cannot encode empty ItemStack"，还以为只是噪音）
+            if (!s.isEmpty()) {
+                pt.put("s" + i, s.save(this.registryAccess()));
+            }
         }
         tag.put("Pack", pt);
         if (!boundModel.isEmpty()) {

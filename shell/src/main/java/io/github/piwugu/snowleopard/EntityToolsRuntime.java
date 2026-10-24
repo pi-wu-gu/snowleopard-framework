@@ -65,6 +65,9 @@ public final class EntityToolsRuntime {
             return;
         }
         SCAN_ANCHORS.put(modelId, anchor.immutable());
+        // 登记点之一：模型被摆到某个位置准备开工 = 它确实存在（自测/验收都走这一条路，
+        // 省掉在每个场景里各写一遍登记）
+        ModelRegistry.register(modelId);
     }
 
     /** 取（或建）某模型的模块。世界上下文：有玩家取其所在世界与位置；无玩家退回出生点（专用服务器自测可用）。 */

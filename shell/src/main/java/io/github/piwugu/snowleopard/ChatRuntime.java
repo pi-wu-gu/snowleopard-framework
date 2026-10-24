@@ -184,7 +184,9 @@ public final class ChatRuntime {
      */
     private static Map<String, String> mentionTargets() {
         Map<String, String> m = new LinkedHashMap<>();
-        for (String caller : BuiltinRuntime.knownCallers()) {
+        // **候选来自单点登记表，不是句柄缓存**（2026-10-24 05:45 (UTC+8)）：
+        // 句柄缓存只在模型调用过内置组工具后才有它 → 新模型永不在册 → 玩家 @它唤不醒（自举死锁）。
+        for (String caller : ModelRegistry.known()) {
             m.put(caller, displayName(caller));
         }
         return m;

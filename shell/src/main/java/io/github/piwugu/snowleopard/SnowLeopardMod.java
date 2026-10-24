@@ -84,6 +84,10 @@ public final class SnowLeopardMod {
                 }
             }
 
+            // 已知模型登记表（落盘 shared/models.json）：必须在聊天/载体之前，
+            // 否则提及候选与推送巡检拿到的是空表（2026-10-24 05:45 (UTC+8)）
+            ModelRegistry.init(core.ids().shared());
+
             // 聊天组执行面（M12）：存储挂 shared/chat，游标挂各自的家
             ChatRuntime.init(gameDir, core);
             // 载体（M13）：实体注册（mod 总线）+ 唤醒源（互动/定时/提及）

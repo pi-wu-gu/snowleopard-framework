@@ -25,6 +25,13 @@ final class SelfTest {
             SnowLeopardMod.LOG.error("[雪豹框架][SELFTEST] FAIL: 核心未装配");
             return false;
         }
+        // 自测卫生（2026-10-24 05:50 (UTC+8)）：模型登记表是落盘的，上一轮的自测编号会留到这一轮；
+        // 它们一旦留着就进提及候选，别人 @到的是上一轮的幽灵。开工先清自己的，别人的不动。
+        for (String m : ModelRegistry.known()) {
+            if (m.startsWith("selftest-")) {
+                ModelRegistry.forget(m);
+            }
+        }
         List<String> fulls = List.copyOf(core.registry().names().fullNames());
         for (String g : GroupNames.ALL) {
             String full = "mod:snowleopard:" + g;

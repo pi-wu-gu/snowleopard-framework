@@ -46,7 +46,7 @@ class ToolSchemasMatrixTest {
     }
 
     @Test
-    void tenGroupsFrozen() {
+    void twelveGroupsFrozen() {
         assertEquals(12, GroupNames.ALL.size(), "十二组名冻结（组名不冒号）");
         assertEquals(41, all().size(),
                 "工具面 12 组 41 工具（craft 新增 2 个）——超差即清单漂移，须同步接入文档");

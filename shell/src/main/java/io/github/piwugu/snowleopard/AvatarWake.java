@@ -77,6 +77,16 @@ public final class AvatarWake {
         return ready() ? store.primaryOf(model) : null;
     }
 
+    /**
+     * 该模型有没有主载体（"有没有身体可以动"的查询）。
+     *
+     * <p>对外公开的是**有没有**这个事实，不是登记项本身——身份解析（叫它什么名字）仍只有
+     * {@link #primaryName} 一处；跨包问"我能不能移动/破坏"不需要拿到 Entry。
+     */
+    public static boolean hasPrimary(String model) {
+        return primaryName(model) != null;
+    }
+
     /** 装配（ChatRuntime.init 之后）。 */
     public static void init(Path gameDir, SnowLeopard core) {
         if (core == null) {
@@ -312,6 +322,8 @@ public final class AvatarWake {
         try {
             AvatarStore.Entry entry = store.bind(avatar.getStringUUID(), model, name);
             avatar.setBoundModel(model);
+            // 登记点之一：有载体 = 这个模型在世界里真的有个身体，从这一刻起它必须能被 @到
+            ModelRegistry.register(model);
             Map<String, Object> out = new java.util.LinkedHashMap<>();
             out.put("uuid", entry.uuid());
             out.put("name", entry.name().isEmpty() ? model : entry.name());
