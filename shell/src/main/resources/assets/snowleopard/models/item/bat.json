@@ -1,7 +1,7 @@
 {
   "parent": "builtin/entity",
   "textures": {
-    "particle": "minecraft:entity/bat"
+    "particle": "snowleopard:item/bat_particle"
   },
   "display": {
     "gui": {
@@ -11,31 +11,31 @@
     },
     "ground": {
       "translation": [0, 2, 0],
-      "scale": [0.6, 0.6, 0.6]
+      "scale": [0.5, 0.5, 0.5]
     },
     "fixed": {
       "rotation": [0, 180, 0],
-      "scale": [0.8, 0.8, 0.8]
+      "scale": [0.7, 0.7, 0.7]
     },
     "thirdperson_righthand": {
       "rotation": [0, 45, 0],
-      "translation": [0, 6, 2],
+      "translation": [0, 9, 3],
       "scale": [0.6, 0.6, 0.6]
     },
     "thirdperson_lefthand": {
       "rotation": [0, -45, 0],
-      "translation": [0, 6, 2],
+      "translation": [0, 9, 3],
       "scale": [0.6, 0.6, 0.6]
     },
     "firstperson_righthand": {
       "rotation": [0, 0, 0],
-      "translation": [1.5, 3, 1],
-      "scale": [0.7, 0.7, 0.7]
+      "translation": [2, 10, 3],
+      "scale": [0.55, 0.55, 0.55]
     },
     "firstperson_lefthand": {
       "rotation": [0, 0, 0],
-      "translation": [-1.5, 3, 1],
-      "scale": [0.7, 0.7, 0.7]
+      "translation": [-2, 10, 3],
+      "scale": [0.55, 0.55, 0.55]
     }
   }
 }
