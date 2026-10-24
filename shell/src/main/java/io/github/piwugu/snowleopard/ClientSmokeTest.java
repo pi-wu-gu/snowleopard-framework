@@ -199,6 +199,24 @@ final class ClientSmokeTest {
             }
         }
 
+        //    (c) attack 属性断言（2026-10-24 17:35 真机抓到的 bug：载体 createAttributes 缺
+        //        ATTACK_DAMAGE，LivingEntity.doHurtTarget 无条件读它 → attack 一调就抛
+        //        "Can't find attribute minecraft:generic.attack_damage"。M6/M11 的 attack 自测
+        //        绑的全是僵尸猪灵，载体本体从没被测过——直接走真实 doHurtTarget 路径补上）
+        var slime = net.minecraft.world.entity.EntityType.SLIME.create(level);
+        if (slime != null) {
+            slime.setPos(avatar.getX() + 1.5, avatar.getY(), avatar.getZ());
+            slime.setPersistenceRequired();
+            level.addFreshEntity(slime);
+            float hpBefore = slime.getHealth();
+            boolean hit = avatar.doHurtTarget(slime);
+            float hpAfter = slime.getHealth();
+            ok("载体可攻击（ATTACK_DAMAGE 属性在，doHurtTarget 真实掉血）",
+                    hit && hpAfter < hpBefore,
+                    "hit=" + hit + " · 史莱姆血量 " + hpBefore + "→" + hpAfter);
+            slime.discard();
+        }
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {

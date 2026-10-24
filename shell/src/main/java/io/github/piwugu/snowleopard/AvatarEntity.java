@@ -38,9 +38,15 @@ public class AvatarEntity extends PathfinderMob
 
     /** 属性（注册见 {@link AvatarEntities}；缺了生成即抛）。 */
     public static AttributeSupplier.Builder createAttributes() {
+        // ATTACK_DAMAGE 必须显式加：Mob.createMobAttributes() 不带它（只有怪物族带），而
+        // LivingEntity.doHurtTarget 无条件读它——缺了 attack 工具一调用就抛
+        // "Can't find attribute minecraft:generic.attack_damage"（2026-10-24 17:35 真机抓到，
+        // M6/M11 的 attack 自测绑的全是僵尸猪灵所以一直没暴露）。1.0 = 空手玩家同级。
         return Mob.createMobAttributes()
                 .add(Attributes.MAX_HEALTH, 20.0)
-                .add(Attributes.MOVEMENT_SPEED, 0.25);
+                .add(Attributes.MOVEMENT_SPEED, 0.25)
+                .add(Attributes.ATTACK_DAMAGE, 1.0)
+                .add(Attributes.ATTACK_KNOCKBACK, 0.0);
     }
 
     @Override
