@@ -121,6 +121,7 @@ public final class EntityToolsModule {
                     case ToolSchemas.INTERACT_PLACE -> place(params);
                     case ToolSchemas.INTERACT_BREAK -> breakBlock(params);
                     case ToolSchemas.INTERACT_STATUS -> interactStatus();
+                    case ToolSchemas.INTERACT_CAPTURE -> capture(params, excludeRefs);
                     default -> Result.error("interact 组无此工具: " + tool);
                 };
                 case io.github.piwugu.snowleopard.tools.GroupNames.MOVE -> switch (tool) {
@@ -137,6 +138,8 @@ public final class EntityToolsModule {
                     case ToolSchemas.ITEM_CONTAINER_ITEMS -> containerItems(params);
                     case ToolSchemas.ITEM_MOVE_ITEM -> moveItem(params);
                     case ToolSchemas.ITEM_DROP -> dropItem(params);
+                    case ToolSchemas.ITEM_PICKUP -> pickup(params);
+                    case ToolSchemas.ITEM_PICKUP_AUTO -> pickupAuto(params);
                     default -> Result.error("item 组无此工具: " + tool);
                 };
                 case io.github.piwugu.snowleopard.tools.GroupNames.WORLD -> switch (tool) {
@@ -1025,7 +1028,7 @@ public final class EntityToolsModule {
         if (src.isEmpty()) {
             return Result.error("来源槽为空: " + params.get("from"));
         }
-        int want = params.get("count") instanceof Number n ? n.intValue() : src.getCount();
+        int want = countParam(params, "count", src.getCount());   // count 宽容解析（2026-10-24 17:52 真机实锤：字符串 "5" 曾被静默整组丢）
         want = Math.min(want, src.getCount());
         if (want <= 0) {
             return Result.error("移动数量非法");
@@ -1062,7 +1065,7 @@ public final class EntityToolsModule {
         if (src.isEmpty()) {
             return Result.error("来源槽为空: " + params.get("from"));
         }
-        int want = params.get("count") instanceof Number n ? n.intValue() : src.getCount();
+        int want = countParam(params, "count", src.getCount());   // count 宽容解析（2026-10-24 17:52 真机实锤：整组丢出 53 木头+18 门）
         want = Math.min(want, src.getCount());
         net.minecraft.world.item.ItemStack dropped = src.copy();
         dropped.setCount(want);
@@ -1071,6 +1074,186 @@ public final class EntityToolsModule {
         self.spawnAtLocation(dropped, 0);
         int after = stackAt(self, level, from).getCount();
         return Result.ok(Map.of("dropped", want, "fromRemaining", after));
+    }
+
+    // ── capture / pickup（v1.10.0，2026-10-24 18:40 (UTC+8)：蝙蝠捕获 + 掉落物拾取，
+    //    可行性见 framework docs/蝙蝠捕获与物品拾取可行性分析-2026-10-24.md §3）──
+
+    /** 捕获触达半径（格）。 */
+    private static final double CAPTURE_REACH = 3.5;
+    /** 主动拾取扫描半径上限（触达判定另算 {@link #PICKUP_TOUCH}）。 */
+    private static final double PICKUP_SCAN_MAX = 6.0;
+    /** 主动拾取触达半径（格）——超出只报 skipped，不隔空取物。 */
+    private static final double PICKUP_TOUCH = 2.5;
+
+    /**
+     * 捕获活体进随身包（v1=只蝙蝠）。完成判定=实体消失+包里多一件（服务端事实）。
+     * <b>包满报错不落地</b>——蝙蝠还在原地，模型换个槽再捕（假成功家族零容忍）。
+     */
+    Result capture(Map<String, Object> params, java.util.function.Predicate<String> excludeRefs) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        if (!(self instanceof io.github.piwugu.snowleopard.tools.PackCarrier carrier)) {
+            return Result.error("绑定的实体没有随身背包（只有 snowleopard:avatar 可捕获）");
+        }
+        String target = String.valueOf(params.get("target"));
+        if (target == null || target.isBlank() || "null".equals(target)) {
+            return Result.error("capture 需要 target（实体编号，query include_entities 得到）");
+        }
+        if (excludeRefs != null && excludeRefs.test(target)) {
+            return Result.error("红线：其他编号（模型）的实体无法捕获——" + target);
+        }
+        ServerLevel level = ctx.level();
+        Entity e = level == null ? null : level.getEntity(java.util.UUID.fromString(target));
+        if (!(e instanceof net.minecraft.world.entity.ambient.Bat bat) || !bat.isAlive()) {
+            return Result.error("捕获目标必须是活的蝙蝠（目标不存在或类型不符——v1 只收蝙蝠）");
+        }
+        if (self.distanceTo(bat) > CAPTURE_REACH) {
+            return Result.error("目标太远（" + String.format("%.1f", self.distanceTo(bat))
+                    + " 格 > " + CAPTURE_REACH + "）——先 goto 走近");
+        }
+        var rest = insertIntoPack(carrier.pack(), BatItem.stackOf());
+        if (!rest.isEmpty()) {
+            return Result.error("随身包已满——捕获取消（蝙蝠还在原地，drop 或 move_item 腾槽后再来）");
+        }
+        faceToward(self, bat.getX(), bat.getY() + 0.2, bat.getZ());
+        level.playSound(null, bat.blockPosition(),
+                net.minecraft.sounds.SoundEvents.BAT_TAKEOFF,
+                net.minecraft.sounds.SoundSource.PLAYERS, 0.7F, 0.8F);
+        bat.discard();
+        return Result.ok(Map.of("ok", true, "item", BatItem.REGISTRY_NAME, "count", 1));
+    }
+
+    /** 主动拾取：扫描半径内按距离由近到远收取；触达外/包满如实报 skipped（不隔空取物）。 */
+    Result pickup(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        if (!(self instanceof io.github.piwugu.snowleopard.tools.PackCarrier carrier)) {
+            return Result.error("绑定的实体没有随身背包（只有 snowleopard:avatar 可拾取）");
+        }
+        ServerLevel level = ctx.level();
+        if (level == null) {
+            return Result.error("无关卡上下文");
+        }
+        int radius = Math.min(countParam(params, "radius", 4), (int) PICKUP_SCAN_MAX);
+        String q = optQuery(params);
+        List<net.minecraft.world.entity.item.ItemEntity> near = level.getEntitiesOfClass(
+                net.minecraft.world.entity.item.ItemEntity.class,
+                self.getBoundingBox().inflate(radius));
+        near.sort(java.util.Comparator.comparingDouble(self::distanceToSqr));   // 近的先收
+        List<Map<String, Object>> picked = new ArrayList<>();
+        List<Map<String, Object>> skipped = new ArrayList<>();
+        for (net.minecraft.world.entity.item.ItemEntity ie : near) {
+            net.minecraft.world.item.ItemStack st = ie.getItem();
+            if (st.isEmpty()) {
+                continue;
+            }
+            if (q != null && !itemMatches(st, q)) {
+                continue;   // 不匹配的直接不入册（picked/skipped 都不提）
+            }
+            String id = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(st.getItem()).toString();
+            if (self.distanceTo(ie) > PICKUP_TOUCH) {
+                skipped.add(Map.of("item", id, "count", st.getCount(),
+                        "reason", "超触达半径(" + PICKUP_TOUCH + "格)——先 goto 走近"));
+                continue;
+            }
+            var rest = insertIntoPack(carrier.pack(), st.copy());
+            if (!rest.isEmpty()) {
+                skipped.add(Map.of("item", id, "count", st.getCount(), "reason", "包满/放不下"));
+                continue;   // 不 break：后面的掉落物还能收
+            }
+            onItemPickup(self, ie);
+            take(self, ie, st.getCount());
+            ie.discard();
+            picked.add(Map.of("item", id, "count", st.getCount()));
+        }
+        return Result.ok(Map.of("picked", picked, "skipped", skipped));
+    }
+
+    /** 拾取动效桥（self 是 LivingEntity，方法在实体上）。 */
+    private static void onItemPickup(LivingEntity self, net.minecraft.world.entity.item.ItemEntity ie) {
+        self.onItemPickup(ie);
+    }
+
+    /** 拾取计数桥（同上）。 */
+    private static void take(LivingEntity self, net.minecraft.world.entity.item.ItemEntity ie, int count) {
+        self.take(ie, count);
+    }
+    private static boolean itemMatches(net.minecraft.world.item.ItemStack st, String query) {
+        String id = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(st.getItem()).toString();
+        String lower = query.toLowerCase();
+        return id.toLowerCase().contains(lower) || st.getHoverName().getString().toLowerCase().contains(lower);
+    }
+
+    /**
+     * 入随身包（返回装不下的剩余；{@code addItem} 只在 {@code SimpleContainer} 上，
+     * {@code PackCarrier.pack()} 是 {@code Container} 接口——载体实包一定是 SimpleContainer，
+     * 别的实现走逐槽兜底）。
+     */
+    private static net.minecraft.world.item.ItemStack insertIntoPack(net.minecraft.world.Container pack,
+                                                                     net.minecraft.world.item.ItemStack stack) {
+        if (pack instanceof net.minecraft.world.SimpleContainer sc) {
+            return sc.addItem(stack);
+        }
+        // 兜底：先叠同物，再找空槽（语义与 SimpleContainer.addItem 一致）
+        net.minecraft.world.item.ItemStack rest = stack.copy();
+        for (int i = 0; i < pack.getContainerSize() && !rest.isEmpty(); i++) {
+            net.minecraft.world.item.ItemStack slot = pack.getItem(i);
+            if (!slot.isEmpty() && net.minecraft.world.item.ItemStack.isSameItemSameComponents(slot, rest)) {
+                int room = Math.min(slot.getMaxStackSize(), pack.getMaxStackSize()) - slot.getCount();
+                if (room > 0) {
+                    int move = Math.min(room, rest.getCount());
+                    slot.grow(move);
+                    rest.shrink(move);
+                    pack.setChanged();
+                }
+            }
+        }
+        for (int i = 0; i < pack.getContainerSize() && !rest.isEmpty(); i++) {
+            if (pack.getItem(i).isEmpty() && pack.canPlaceItem(i, rest)) {
+                int move = Math.min(rest.getCount(), Math.min(rest.getMaxStackSize(), pack.getMaxStackSize()));
+                pack.setItem(i, rest.split(move));
+            }
+        }
+        return rest;
+    }
+
+    /**
+     * 自动拾取开关（走原版 {@code Mob.setCanPickUpLoot}——载体覆盖后路由到自身字段，
+     * 随原版 NBT {@code "CanPickUpLoot"} 持久化）。过滤词经 {@code PickupCarrier} 存实体 NBT。
+     * 原版扫描前置含 mobGriefing 游戏规则（默认开）——关了会"开关亮着但不捡"，如实注明。
+     */
+    Result pickupAuto(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
+        }
+        if (!(self instanceof io.github.piwugu.snowleopard.tools.PickupCarrier carrier)) {
+            return Result.error("绑定的实体不支持自动拾取配置（只有 snowleopard:avatar 可以）");
+        }
+        if (!(self instanceof net.minecraft.world.entity.Mob mob)) {
+            return Result.error("绑定实体不是 Mob——无法接原版拾取扫描");
+        }
+        String mode = String.valueOf(params.get("enabled"));
+        if ("on".equalsIgnoreCase(mode)) {
+            mob.setCanPickUpLoot(true);
+        } else if ("off".equalsIgnoreCase(mode)) {
+            mob.setCanPickUpLoot(false);
+        } else if (mode != null && !"null".equals(mode) && !"status".equalsIgnoreCase(mode)) {
+            return Result.error("enabled 只收 on|off|status: " + mode);
+        }
+        Object filter = params.get("filter");
+        if (filter != null && !"null".equals(String.valueOf(filter))) {
+            carrier.setPickupFilter(String.valueOf(filter));
+        }
+        return Result.ok(Map.of(
+                "enabled", mob.canPickUpLoot(),
+                "filter", carrier.pickupFilter(),
+                "note", "自动拾取跳过自己丢出的掉落物；过滤词只影响自动拾取"));
     }
 
     /**
@@ -1136,20 +1319,9 @@ public final class EntityToolsModule {
         ServerLevel level = ctx.level();
         var access = level.registryAccess();
         String rid = String.valueOf(params.get("recipe_id"));
-        // count 宽容解析（2026-10-24 12:10 真机断言抓到）：schema 里所有参数都是 string 型，
-        // 模型常发 "count":"2"——只认 Number 会静默落到 1（真机证据：count=2 实合 1 次）。
-        // Number（模型发数字 JSON）与可解析字符串都收；解析不动才回落 1，由下面的 1..8 夹取兜底
-        int count = 1;
-        Object cv = params.get("count");
-        if (cv instanceof Number n) {
-            count = n.intValue();
-        } else if (cv != null) {
-            try {
-                count = Integer.parseInt(String.valueOf(cv).trim());
-            } catch (NumberFormatException ignored) {
-                // 保持 1
-            }
-        }
+        // count 宽容解析（v1.9.4 首修；v1.10.0 收口到 countParam 三处共用——drop/move_item
+        // 漏修同款缺陷，17:52 真机整组丢出实锤）
+        int count = countParam(params, "count", 1);
         if (count < 1 || count > 8) {
             return Result.error("count 1..8: " + count);
         }
@@ -1537,6 +1709,11 @@ public final class EntityToolsModule {
     private static int optInt(Map<String, Object> params, String key, int dflt) {
         Object v = params.get(key);
         return v instanceof Number n ? n.intValue() : dflt;
+    }
+
+    /** count 宽容解析（三处共用；纯 Java 单点在 {@link CountParams}——v1.10.0 收口）。 */
+    static int countParam(Map<String, Object> params, String key, int dflt) {
+        return io.github.piwugu.snowleopard.tools.CountParams.parse(params, key, dflt);
     }
 
     private static long optLong(Map<String, Object> params, String key, long dflt) {

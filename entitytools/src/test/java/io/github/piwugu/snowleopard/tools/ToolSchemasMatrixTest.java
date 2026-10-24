@@ -26,7 +26,9 @@ class ToolSchemasMatrixTest {
             "move", new String[]{"true", "changes_world"},
             "goto", new String[]{"true", "changes_world"},
             "move_item", new String[]{"true", "changes_world"},
-            "drop", new String[]{"false", "changes_world"});
+            "drop", new String[]{"false", "changes_world"},
+            "capture", new String[]{"false", "changes_world"},
+            "pickup", new String[]{"true", "changes_world"});
 
     private static List<ToolRegistry.Tool> all() {
         List<ToolRegistry.Tool> all = new java.util.ArrayList<>();
@@ -48,8 +50,8 @@ class ToolSchemasMatrixTest {
     @Test
     void twelveGroupsFrozen() {
         assertEquals(12, GroupNames.ALL.size(), "十二组名冻结（组名不冒号）");
-        assertEquals(41, all().size(),
-                "工具面 12 组 41 工具（craft 新增 2 个）——超差即清单漂移，须同步接入文档");
+        assertEquals(44, all().size(),
+                "工具面 12 组 44 工具（v1.10.0：+capture/pickup/pickup_auto）——超差即清单漂移，须同步接入文档");
     }
 
     @Test

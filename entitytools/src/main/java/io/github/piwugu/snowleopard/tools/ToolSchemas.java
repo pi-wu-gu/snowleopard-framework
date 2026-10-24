@@ -34,6 +34,7 @@ public final class ToolSchemas {
     public static final String INTERACT_PLACE = "place";
     public static final String INTERACT_BREAK = "break";
     public static final String INTERACT_STATUS = "status";
+    public static final String INTERACT_CAPTURE = "capture";
 
     // ── move（移动，M4）──
     public static final String MOVE_MOVE = "move";
@@ -48,6 +49,8 @@ public final class ToolSchemas {
     public static final String ITEM_CONTAINER_ITEMS = "container_items";
     public static final String ITEM_MOVE_ITEM = "move_item";
     public static final String ITEM_DROP = "drop";
+    public static final String ITEM_PICKUP = "pickup";
+    public static final String ITEM_PICKUP_AUTO = "pickup_auto";
 
     // ── world（世界，M5）──
     public static final String WORLD_QUERY = "query";
@@ -134,7 +137,12 @@ public final class ToolSchemas {
                             "reversible", "false", "state", "changes_world")),
             new ToolRegistry.Tool(INTERACT_STATUS, "查询挖掘进行状态与结果",
                     "interact.status() → {outcome, target, elapsed, requiredTicks}",
-                    Map.of("type", "object", "note", "无参数")));
+                    Map.of("type", "object", "note", "无参数")),
+            new ToolRegistry.Tool(INTERACT_CAPTURE, "捕获活体进随身包（v1.10.0：只蝙蝠；包满报错不落地）",
+                    "interact.capture(target) → {ok, item, count}；放走/吃掉是玩家对该物品的右键行为",
+                    Map.of("type", "object", "required", java.util.List.of("target"),
+                            "target", "实体编号（query include_entities 得到；限蝙蝠，≤3.5 格）",
+                            "reversible", "false", "state", "changes_world")));
 
     public static final java.util.List<ToolRegistry.Tool> MOVE_TOOLS = java.util.List.of(
             new ToolRegistry.Tool(MOVE_MOVE, "移动：方向+时长|距离（三驱动之二；方向=开始时朝向冻结）",
@@ -175,13 +183,26 @@ public final class ToolSchemas {
                     "item.move_item(from, to, count?) → {moved}；from/to 如 \"x,y,z:3\"|\"self:mainhand\"",
                     Map.of("type", "object", "required", java.util.List.of("from", "to"),
                             "from", "槽位引用", "to", "槽位引用",
-                            "count", "可选数量（缺省=整组）",
+                            "count", "可选数量（缺省=整组；数字或数字字符串都收）",
                             "reversible", "true", "state", "changes_world")),
             new ToolRegistry.Tool(ITEM_DROP, "丢弃物品（从槽位掉落实体）",
                     "item.drop(from, count?) → {dropped}",
                     Map.of("type", "object", "required", java.util.List.of("from"),
-                            "from", "槽位引用", "count", "可选数量（缺省=整组）",
-                            "reversible", "false", "state", "changes_world")));
+                            "from", "槽位引用",
+                            "count", "可选数量（缺省=整组；数字或数字字符串都收）",
+                            "reversible", "false", "state", "changes_world")),
+            new ToolRegistry.Tool(ITEM_PICKUP, "主动拾取身边掉落物（≤触达半径才收；远处先 goto）",
+                    "item.pickup(query?, radius?) → {picked, skipped}",
+                    Map.of("type", "object",
+                            "query", "可选过滤（registry id 或显示名子串；缺省=全部）",
+                            "radius", "可选扫描半径（缺省 4，上限 6；实际收取限触达 2.5 格）",
+                            "reversible", "true", "state", "changes_world")),
+            new ToolRegistry.Tool(ITEM_PICKUP_AUTO, "自动拾取开关（走过就捡；自己丢出的不捡回）",
+                    "item.pickup_auto(enabled?, filter?) → {enabled, filter}",
+                    Map.of("type", "object",
+                            "enabled", "on|off|status（缺省=查询当前态）",
+                            "filter", "可选 registry id 子串（空=全部；只影响自动拾取）",
+                            "note", "开关随实体持久化；依赖 mobGriefing 游戏规则（默认开）")));
 
     public static final java.util.List<ToolRegistry.Tool> WORLD_TOOLS = java.util.List.of(
             new ToolRegistry.Tool(WORLD_QUERY, "区域查询（单一工具：中心|框选 + 检索 + 含实体；双护栏）",

@@ -217,6 +217,90 @@ final class ClientSmokeTest {
             slime.discard();
         }
 
+        //    (d) drop count 宽容解析回归（2026-10-24 17:52 真机实锤：schema 全 string，模型发
+        //        "count":"3" → 旧实现只认 Number → 静默整组丢 53 木头+18 门。修后字符串必须真拆）
+        if (avatar instanceof io.github.piwugu.snowleopard.tools.PackCarrier pcDrop) {
+            pcDrop.pack().setItem(4, new net.minecraft.world.item.ItemStack(
+                    net.minecraft.world.item.Items.DIRT, 10));
+            Result dr = EntityToolsRuntime.dispatch(model, "item", "drop",
+                    Map.of("from", "self:pack:4", "count", "3"));
+            int left = pcDrop.pack().getItem(4).getCount();
+            boolean dropped3 = String.valueOf(brief(dr)).contains("dropped=3") || String.valueOf(brief(dr)).contains("dropped= 3");
+            ok("drop 按字符串 count 真拆（\"3\" → 3 个，不整组）",
+                    dr instanceof Result.Ok && left == 7 && dropped3,
+                    brief(dr) + " · 包剩=" + left + "（期望 7）");
+            pcDrop.pack().setItem(4, net.minecraft.world.item.ItemStack.EMPTY);
+            // 清场：丢出去的泥土实体收掉，别污染后面的断言/玩家视野
+            for (net.minecraft.world.entity.Entity e : level.getAllEntities()) {
+                if (e instanceof net.minecraft.world.entity.item.ItemEntity ie
+                        && ie.getItem().is(net.minecraft.world.item.Items.DIRT)) {
+                    ie.discard();
+                }
+            }
+        }
+
+        //    (e) 捕获 + 拾取 + 自丢反馈环（v1.10.0 三件套，全走服务端事实）
+        if (avatar instanceof io.github.piwugu.snowleopard.tools.PickupCarrier carrier) {
+            // (e1) capture：真蝙蝠 → discard + snowleopard:bat 入包
+            var bat = net.minecraft.world.entity.EntityType.BAT.create(level);
+            if (bat != null) {
+                bat.setPos(avatar.getX() + 1.0, avatar.getY() + 1.0, avatar.getZ());
+                bat.setPersistenceRequired();
+                level.addFreshEntity(bat);
+                boolean hadBat = false;
+                Result cap = EntityToolsRuntime.dispatch(model, "interact", "capture",
+                        Map.of("target", bat.getStringUUID()));
+                for (int i = 0; i < carrier.pack().getContainerSize(); i++) {
+                    if (carrier.pack().getItem(i).is(
+                            io.github.piwugu.snowleopard.mc.BatItems.BAT.get())) {
+                        hadBat = true;
+                    }
+                }
+                ok("capture 蝙蝠入包（实体消失+物品真在包里）",
+                        cap instanceof Result.Ok && hadBat && !bat.isAlive(),
+                        brief(cap) + " · 蝙蝠实体存活=" + bat.isAlive());
+            }
+            // (e2) 自动拾取开关 + 过滤词 + 自丢判据（直接调原版扫描的三个覆盖点，不依赖 tick 时序）
+            avatar.setCanPickUpLoot(true);
+            carrier.setPickupFilter("iron");
+            var gold = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.GOLD_NUGGET, 2);
+            var iron = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.IRON_NUGGET, 2);
+            ok("pickup_auto 过滤词生效（filter=iron：金粒拒、铁粒收）",
+                    !avatar.wantsToPickUp(gold) && avatar.wantsToPickUp(iron),
+                    "gold=" + avatar.wantsToPickUp(gold) + " iron=" + avatar.wantsToPickUp(iron));
+            carrier.setPickupFilter("");
+            // 自丢反馈环：thrower=自己 的掉落物自动拾取必须跳过（否则 drop 给玩家的东西 0.5s 被捡回）
+            var selfDropped = new net.minecraft.world.entity.item.ItemEntity(level,
+                    avatar.getX() + 0.5, avatar.getY(), avatar.getZ(),
+                    new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OAK_PLANKS, 4));
+            selfDropped.setThrower(avatar);
+            level.addFreshEntity(selfDropped);
+            avatar.pickUpItem(selfDropped);
+            var others = new net.minecraft.world.entity.item.ItemEntity(level,
+                    avatar.getX() + 0.5, avatar.getY(), avatar.getZ(),
+                    new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OAK_PLANKS, 4));
+            level.addFreshEntity(others);
+            avatar.pickUpItem(others);
+            ok("自丢反馈环判据（自己丢的不捡、别人的收）",
+                    selfDropped.isAlive() && !others.isAlive(),
+                    "自丢存活=" + selfDropped.isAlive() + " · 他人掉落物存活=" + others.isAlive());
+            // (e3) 主动 pickup：扫描+过滤+触达（上面的铁粒/木板已被手摆收取；这里补一单工具面调用）
+            var far = new net.minecraft.world.entity.item.ItemEntity(level,
+                    avatar.getX() + 3.5, avatar.getY(), avatar.getZ(),
+                    new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.CLAY_BALL, 1));
+            level.addFreshEntity(far);
+            Result pk = EntityToolsRuntime.dispatch(model, "item", "pickup", Map.of());
+            boolean claySkipped = String.valueOf(brief(pk)).contains("clay_ball")
+                    && String.valueOf(brief(pk)).contains("超触达");
+            ok("pickup 触达外如实进 skipped（3.5 格在扫描 4 内、触达 2.5 外，不隔空取物）",
+                    pk instanceof Result.Ok && claySkipped,
+                    brief(pk));
+            // 收尾：清掉测试掉落物，恢复自动拾取默认态（关）——别把自测状态漏给真实会话
+            selfDropped.discard();
+            avatar.setCanPickUpLoot(false);
+            carrier.setPickupFilter("");
+        }
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {

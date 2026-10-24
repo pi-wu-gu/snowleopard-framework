@@ -182,10 +182,11 @@ class DocsCheckTest {
             "MinecraftServer", "ServerLevel", "ServerPlayer", "ServerChatEvent", "SimpleContainer",
             "CraftingInput", "CraftingRecipe", "Ingredient", "BlockPos", "ItemStack", "Container",
             "LivingIncomingDamageEvent", "PlayerInteractEvent", "ServerStarted", "MISC",
+            "Mob", "AttributeMap", "BatModel",
             // NeoForge
             "DeferredRegister", "BootstrapLauncher", "RegisterCapabilitiesEvent", "NoAi",
             // JDK
-            "HttpClient", "Json");
+            "HttpClient", "Json", "Number");
 
     private static final java.util.Set<String> KNOWN = new java.util.HashSet<>();
 
