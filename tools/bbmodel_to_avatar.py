@@ -331,12 +331,16 @@ def build_setup_anim(bones):
     # 瞳孔（预留：几何修好后自动生效）
     pupils = [n for n in names if n.startswith("eye_pupil")]
     if pupils:
-        A("\n        // 瞳孔：随头部朝向做微小偏移（±0.2px），几何修好后立即可见\n")
+        A("\n        // 瞳孔：随头部朝向做微小偏移（±0.2px）。\n")
+        A("        // 必须先 resetPose() 回到 PartPose 基准再加：ModelPart.x/y/z 就是基准位移本身，\n")
+        A("        // 直接 x = gazeX 会把 PartPose 的偏移整个抹掉——v1.12.2 真机即如此，\n")
+        A("        // 瞳孔掉到眼睛组 pivot（= 头的 pivot 高度），看起来就是\"跑到下颚中间\"。\n")
         A("        float gazeX = Mth.clamp(netHeadYaw * 0.008F, -0.2F, 0.2F);\n")
         A("        float gazeY = Mth.clamp(headPitch * 0.006F, -0.15F, 0.15F);\n")
         for n in pupils:
-            A("        this.%s.x = gazeX;\n" % camel(n))
-            A("        this.%s.y = gazeY;\n" % camel(n))
+            A("        this.%s.resetPose();\n" % camel(n))
+            A("        this.%s.x += gazeX;\n" % camel(n))
+            A("        this.%s.y += gazeY;\n" % camel(n))
 
     # 下颚（外部状态驱动）
     if "jaw" in names:
@@ -424,6 +428,12 @@ def self_check(java, bones):
         problems.append("addOrReplaceChild %d != 骨骼 %d"
                         % (java.count("addOrReplaceChild"), len(bones)))
     # 只数生成出来的调用行（带缩进），注释里出现 "PartPose." 不算
+    # 位移类动画必须先 resetPose 再 "+="：直接赋值会抹掉 PartPose 基准（v1.12.2 真机踩过）
+    for line in java.splitlines():
+        t = line.strip()
+        if t.startswith("this.") and t.endswith(";") and (".x =" in t or ".y =" in t or ".z =" in t):
+            problems.append("位移直接赋值会抹掉基准: " + t)
+
     n_pose = java.count("                PartPose.offset(") + \
         java.count("                PartPose.offsetAndRotation(")
     if n_pose != len(bones):

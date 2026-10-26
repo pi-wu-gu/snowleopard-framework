@@ -318,8 +318,8 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
 
         // 耳朵：低频抖动
         float flick = Mth.cos(ageInTicks * 0.1F) * 0.05F;
-        this.earRight.zRot = -0.3491F + flick;
-        this.earLeft.zRot = 0.3491F - flick;
+        this.earLeft.zRot = 0.3491F + flick;
+        this.earRight.zRot = -0.3491F - flick;
 
         // 眨眼：眼皮默认隐藏（本模型眼皮与眼白同尺寸，静态显示会盖住眼睛），
         // 每 100 tick 眨一次、闭合 4 tick。要改成"默认闭合"只翻转两个分支即可。
@@ -327,13 +327,18 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
         this.eyeLidRight.visible = blink;
         this.eyeLidLeft.visible = blink;
 
-        // 瞳孔：随头部朝向做微小偏移（±0.2px），几何修好后立即可见
+        // 瞳孔：随头部朝向做微小偏移（±0.2px）。
+        // 必须先 resetPose() 回到 PartPose 基准再加：ModelPart.x/y/z 就是基准位移本身，
+        // 直接 x = gazeX 会把 PartPose 的偏移整个抹掉——v1.12.2 真机即如此，
+        // 瞳孔掉到眼睛组 pivot（= 头的 pivot 高度），看起来就是"跑到下颚中间"。
         float gazeX = Mth.clamp(netHeadYaw * 0.008F, -0.2F, 0.2F);
         float gazeY = Mth.clamp(headPitch * 0.006F, -0.15F, 0.15F);
-        this.eyePupilRight.x = gazeX;
-        this.eyePupilRight.y = gazeY;
-        this.eyePupilLeft.x = gazeX;
-        this.eyePupilLeft.y = gazeY;
+        this.eyePupilRight.resetPose();
+        this.eyePupilRight.x += gazeX;
+        this.eyePupilRight.y += gazeY;
+        this.eyePupilLeft.resetPose();
+        this.eyePupilLeft.x += gazeX;
+        this.eyePupilLeft.y += gazeY;
 
         // 下颚：jawOpen 0=闭 1=张，由宿主状态（被打/说话/进食）驱动
         this.jaw.xRot = 0.1745F - this.jawOpen * 0.45F;
