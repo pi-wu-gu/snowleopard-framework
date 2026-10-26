@@ -27,7 +27,7 @@ public final class AvatarEntities {
 
     public static final Supplier<EntityType<AvatarEntity>> AVATAR = TYPES.register("avatar",
             () -> EntityType.Builder.of(AvatarEntity::new, MobCategory.MISC)
-                    .sized(0.6f, 0.7f)
+                    .sized(0.9f, 1.4f)
                     .clientTrackingRange(10)
                     .build("snowleopard_avatar"));
 

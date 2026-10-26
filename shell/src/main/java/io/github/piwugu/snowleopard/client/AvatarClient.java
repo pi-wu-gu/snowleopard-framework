@@ -2,8 +2,7 @@ package io.github.piwugu.snowleopard.client;
 
 import io.github.piwugu.snowleopard.AvatarEntities;
 import io.github.piwugu.snowleopard.AvatarEntity;
-import net.minecraft.client.model.OcelotModel;
-import net.minecraft.client.model.geom.ModelLayers;
+import io.github.piwugu.snowleopard.client.model.SnowLeopardModel;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.client.renderer.entity.MobRenderer;
 import net.minecraft.resources.ResourceLocation;
@@ -29,6 +28,12 @@ public final class AvatarClient {
     private AvatarClient() {
     }
 
+    /** 雪豹自定义模型的 LayerDefinition（v1.12.0）。 */
+    @SubscribeEvent
+    public static void onRegisterLayerDefinitions(EntityRenderersEvent.RegisterLayerDefinitions event) {
+        event.registerLayerDefinition(SnowLeopardModel.LAYER_LOCATION, SnowLeopardModel::createBodyLayer);
+    }
+
     @SubscribeEvent
     public static void onRegisterRenderers(EntityRenderersEvent.RegisterRenderers event) {
         event.registerEntityRenderer(AvatarEntities.AVATAR.get(), AvatarRenderer::new);
@@ -47,18 +52,19 @@ public final class AvatarClient {
     }
 
     /** 渲染器本体（贴图原版、零新资源）。 */
-    public static final class AvatarRenderer extends MobRenderer<AvatarEntity, OcelotModel<AvatarEntity>> {
-
-        private static final ResourceLocation TEXTURE =
-                ResourceLocation.withDefaultNamespace("textures/entity/cat/ocelot.png");
+    public static final class AvatarRenderer extends MobRenderer<AvatarEntity, SnowLeopardModel> {
 
         public AvatarRenderer(EntityRendererProvider.Context context) {
-            super(context, new OcelotModel<>(context.bakeLayer(ModelLayers.OCELOT)), 0.4f);
+            // v1.12.0：载体从"复用豹猫外观"换成自建雪豹模型（tools/bbmodel_to_avatar.py 生成）。
+            // 回滚只需把这两行换回：
+            //   super(context, new OcelotModel<>(context.bakeLayer(ModelLayers.OCELOT)), 0.4f);
+            //   并把泛型改回 MobRenderer<AvatarEntity, OcelotModel<AvatarEntity>>。
+            super(context, new SnowLeopardModel(context.bakeLayer(SnowLeopardModel.LAYER_LOCATION)), 0.6f);
         }
 
         @Override
         public ResourceLocation getTextureLocation(AvatarEntity entity) {
-            return TEXTURE;
+            return SnowLeopardRenderer.TEXTURE;
         }
     }
 

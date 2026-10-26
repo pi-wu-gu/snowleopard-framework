@@ -405,6 +405,14 @@ final class ClientSmokeTest {
                             + " · 压缩=" + (memRes == null ? "null" : memRes));
         }
 
+        //    (j) 载体尺寸（v1.12.0 换成自建雪豹模型后同步放大）：模型 0.79×1.44 格，
+        //        碰撞箱若仍是豹猫的 0.6×0.7 会明显不匹配（穿模 + 右键难命中）。
+        //        这里断言的是**服务端可测的事实**，不是渲染效果——渲染只能肉眼。
+        var dims = avatar.getDimensions(net.minecraft.world.entity.Pose.STANDING);
+        ok("载体碰撞箱与雪豹模型匹配（0.9 × 1.4）",
+                Math.abs(dims.width() - 0.9f) < 0.011f && Math.abs(dims.height() - 1.4f) < 0.011f,
+                "w=" + dims.width() + " h=" + dims.height());
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {
