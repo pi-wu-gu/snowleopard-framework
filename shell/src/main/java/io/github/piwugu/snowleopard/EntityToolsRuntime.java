@@ -102,6 +102,15 @@ public final class EntityToolsRuntime {
                 ServerPlayer p = firstPlayer(s);
                 return p != null ? p.blockPosition() : s.overworld().getSharedSpawnPos();
             }
+
+            /**
+             * 视觉能力（L0–L3）：由 host 单点计算后注入。
+             * 工具层只读这一个字符串——**不在工具层重算**，否则提示词说 A、工具说 B。
+             */
+            @Override
+            public String visionStatus() {
+                return io.github.piwugu.snowleopard.host.AiHost.visionStatusLine();
+            }
         }));
     }
 

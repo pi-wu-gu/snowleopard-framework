@@ -34,6 +34,16 @@ public final class EntityToolsModule {
         ServerLevel level();
 
         net.minecraft.core.BlockPos center();
+
+        /**
+         * 视觉能力的一行状态（壳侧注入；{@code null} = 未接）。
+         *
+         * <p>放在 Ctx 而不是让工具层去问宿主：**entitytools 不许反依赖 shell**
+         * （与 {@code PickupCarrier} 同一先例——契约在工具层，实现由壳注入）。
+         */
+        default String visionStatus() {
+            return null;
+        }
     }
 
     private final String modelId;
@@ -390,6 +400,12 @@ public final class EntityToolsModule {
         }
         if (lookLock.lastEnd() != null) {
             d.put("lastEnd", lookLock.lastEnd().name());
+        }
+        // 视觉能力（壳侧注入；缺省不出现）。放在这里而不是新开工具：
+        // 模型问"我能不能看图"是状态查询，跟"我在往哪看"同一类问题，不该多一个工具名
+        String vision = ctx.visionStatus();
+        if (vision != null) {
+            d.put("vision", vision);
         }
         return Result.ok(d);
     }

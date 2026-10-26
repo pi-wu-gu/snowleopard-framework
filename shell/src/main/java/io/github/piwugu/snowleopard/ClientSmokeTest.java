@@ -413,6 +413,16 @@ final class ClientSmokeTest {
                 Math.abs(dims.width() - 0.9f) < 0.011f && Math.abs(dims.height() - 1.4f) < 0.011f,
                 "w=" + dims.width() + " h=" + dims.height());
 
+        //    (k) "降级可得知"（v1.12.4）：view/status 必须带 vision 字段，且字段里含能力级。
+        //        只验"没崩"是不够的——字段真在、真有 level=，模型才可能知道自己看不了图。
+        //        这里不断言具体级别（级别取决于配置与渲染后端），只断言"能力信息可见"。
+        var vres = EntityToolsRuntime.dispatch(model, "view", "status", Map.of());
+        String vtext = String.valueOf(vres instanceof snowleopard.core.result.Result.Ok o
+                ? o.data() : vres);
+        ok("视觉能力对模型可见（view/status 带 vision 字段与能力级）",
+                vtext.contains("vision") && vtext.contains("level=") && vtext.contains("render="),
+                brief(vres));
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {

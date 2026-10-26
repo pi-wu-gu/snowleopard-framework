@@ -53,6 +53,12 @@ public final class AiHost {
     private static volatile ConversationStore store;
     private static volatile int maxRounds = 12;
     private static volatile int historyWindow = 40;
+    /** 视觉能力（**单点计算**，见 {@link VisionCapability}）——每次会话开头重算。 */
+    private static volatile VisionCapability capability =
+            VisionCapability.compute(null, false, false, "AI 执行端未启用");
+    /** 各模型上次见到的能力级：用来判断"能力变了要告诉模型"，只发一次。 */
+    private static final java.util.Map<String, String> LAST_LEVEL =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private static final AtomicBoolean inFlight = new AtomicBoolean(false);
     private static final java.util.concurrent.ExecutorService WORKER =
             Executors.newSingleThreadExecutor(r -> {
@@ -66,6 +72,16 @@ public final class AiHost {
 
     public static boolean ready() {
         return client != null;
+    }
+
+    /**
+     * 视觉能力紧凑串（{@code view/status} 用）。
+     *
+     * <p>**永远给得出话**：没启用也要说明为什么（"视觉未启用（vision.enabled=false）"），
+     * 返回空串会让模型以为"这个字段没意义"而不是"我看不了"。
+     */
+    public static String visionStatusLine() {
+        return capability.compact();
     }
 
     /**
@@ -89,11 +105,49 @@ public final class AiHost {
             store = new ConversationStore(core.ids().root());   // root() 就是 ids 根，不要再拼 "ids"
             maxRounds = cfg.maxRounds();
             historyWindow = cfg.historyWindow();
+            capability = computeCapability(cfg);
             SnowLeopardMod.LOG.info("[雪豹框架][host] AI 执行端就绪（{} 家提供商，轮次预算 {}）",
                     cfg.providers().size(), cfg.maxRounds());
+            // 降级必须可得知：这两行是**真机可 grep 的能力证据**（不许只留在注释里）
+            SnowLeopardMod.LOG.info("[雪豹框架][host] 视觉能力 {}（rendered={}）", capability.compact(),
+                    cfg.vision().enabled());
+            SnowLeopardMod.LOG.info("[雪豹框架][host] 路由 chat={} compress={} vision={}",
+                    client.plan(false), rolePlan(cfg, LlmConfig.ROLE_COMPRESS), client.plan(true));
         } catch (Exception e) {
             SnowLeopardMod.LOG.error("[雪豹框架][host] 初始化失败——AI 执行端停用: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * 算能力级（**唯一计算点**）。
+     *
+     * <p>渲染后端的真实可用性：
+     * <ul>
+     *   <li>{@code none} → 不可渲染；</li>
+     *   <li>{@code stub} → 可渲染但**是假画面**，且只许客户端验收模式用（生产配置一律按不可用处理）；</li>
+     *   <li>{@code client} → P4 才接入，现在按不可用处理并如实说明（**不许假装能用**）。</li>
+     * </ul>
+     */
+    private static VisionCapability computeCapability(LlmConfig cfg) {
+        String backend = cfg.vision().backend();
+        boolean enabled = cfg.vision().enabled();
+        boolean stub = enabled && "stub".equals(backend);
+        if (stub && !Boolean.getBoolean("snowleopard.clienttest")) {
+            SnowLeopardMod.LOG.warn("[雪豹框架][host] vision.backend=stub 只许客户端验收模式使用——按不可用处理");
+            stub = false;
+        }
+        boolean render = stub;   // 只有 stub 真的能出图；client 后端 P4 才实现
+        String reason = !enabled
+                ? "视觉未启用（vision.enabled=false）"
+                : "client".equals(backend) ? "渲染后端（客户端离屏渲染）尚未接入"
+                : "none".equals(backend) ? "未配置渲染后端" : "渲染后端不可用";
+        return VisionCapability.compute(client, render, stub, reason);
+    }
+
+    /** 某个角色的首选提供商（只用于日志，不触发请求）。 */
+    private static String rolePlan(LlmConfig cfg, String role) {
+        LlmConfig.Provider p = cfg.providerFor(role);
+        return p == null ? "（未配置→按 providers 顺序）" : p.name() + "/" + p.model();
     }
 
     /** 启动时的预热：把 LLM 配置里的 Compressor 挂上（在 bootstrap 前调用才生效）。 */
@@ -104,7 +158,9 @@ public final class AiHost {
         }
         try {
             LlmClient c = new LlmClient(LlmConfig.load(f));
-            return (purpose, sourceText) -> c.complete(
+            // role=compress：**必须待在文本模型上**。原来走 chat("", …) → start=0 → 永远用
+            // providers[0]，一旦把视觉模型放首位，记忆压缩就被带偏了（2026-10-27 05:50 (UTC+8)）
+            return (purpose, sourceText) -> c.complete(LlmConfig.ROLE_COMPRESS,
                     "你是记忆压缩器。把源文本压缩为要点摘要，保留事实与时间戳，不要评论、不要客套。",
                     "用途: " + purpose + "\n源文本:\n" + sourceText);
         } catch (Exception e) {
@@ -192,6 +248,17 @@ public final class AiHost {
         if (turnLine != null) {
             user.append("\n\n").append(turnLine);
         }
+        // 降级/恢复必须说出来——**只在与该模型上次见到的级别不同时发一次**，
+        // 否则每轮都刷，模型会把警示当噪音（这是"降级可得知"的第四个可见面）
+        VisionCapability cap = capability;
+        String prevLevel = LAST_LEVEL.put(model, cap.level().name());
+        if (prevLevel != null && !prevLevel.equals(cap.level().name())) {
+            String warn = cap.changeLine(prevLevel);
+            user.append("\n\n").append(warn);
+            rec.note(warn);
+            SnowLeopardMod.LOG.info("[雪豹框架][host] 视觉能力变化 {} {} → {}（已告知模型）",
+                    model, prevLevel, cap.level());
+        }
 
         List<Map<String, Object>> messages = new ArrayList<>();
         messages.add(Map.of("role", "system", "content", systemPrompt(model)));
@@ -205,13 +272,14 @@ public final class AiHost {
         List<Map<String, Object>> tools = toolSchemas(core);
         String finalText = "";
         for (int round = 1; round <= maxRounds; round++) {
-            Map<String, Object> assistant = client.chat(model, messages, tools);
+            // 带图请求只在多模态提供商之间转移（能力守卫在 LlmClient 里，这里只负责判定）
+            Map<String, Object> assistant = client.chat(model, messages, tools, hasImagePart(messages));
             store.append(model, assistant);
             messages.add(assistant);
-            rec.model(str(assistant.get("content")));
+            rec.model(LlmClient.textOf(assistant.get("content")));
             Object calls = assistant.get("tool_calls");
             if (!(calls instanceof List<?> callList) || callList.isEmpty()) {
-                finalText = String.valueOf(assistant.get("content"));
+                finalText = LlmClient.textOf(assistant.get("content"));
                 break;
             }
             for (Object o : callList) {
@@ -435,10 +503,31 @@ public final class AiHost {
                 %s
                 - 保持简短自然，像世界里的一个角色，不是客服机器人。
                 """.formatted(name, areaLine));
+        // 视觉能力（L0–L3 单点计算的唯一来源）——**会话开头就定调**，
+        // 免得模型先入为主地以为"我能看到"（假成功家族）
+        b.append(capability.promptLine());
         return b.toString();
     }
 
     private static String str(Object o) {
         return o == null ? "" : String.valueOf(o);
+    }
+
+    /**
+     * 消息里是否含图片 part（{@code content} 为数组且其中一项带 {@code image_url}）。
+     * 这决定本轮 chat 走不走视觉提供商——**判定与路由必须同源**，否则会出现
+     * "带着图去问文本模型"（P0 风险 A）。
+     */
+    private static boolean hasImagePart(List<Map<String, Object>> messages) {
+        for (Map<String, Object> m : messages) {
+            if (m.get("content") instanceof List<?> parts) {
+                for (Object p : parts) {
+                    if (p instanceof Map<?, ?> pm && pm.containsKey("image_url")) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 }
