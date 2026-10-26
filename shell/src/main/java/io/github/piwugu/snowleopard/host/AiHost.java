@@ -59,6 +59,11 @@ public final class AiHost {
     /** 各模型上次见到的能力级：用来判断"能力变了要告诉模型"，只发一次。 */
     private static final java.util.Map<String, String> LAST_LEVEL =
             new java.util.concurrent.ConcurrentHashMap<>();
+    /** 视觉渲染后端（P3 = stub；P4 换客户端离屏渲染）。缺省不可用，绝不假装能拍。 */
+    private static volatile io.github.piwugu.snowleopard.tools.VisionBackend visionBackend =
+            io.github.piwugu.snowleopard.tools.VisionBackend.NONE;
+    /** 视觉配置快照（宽度/高度/预算/保留张数）。 */
+    private static volatile LlmConfig.VisionSettings visionCfg = LlmConfig.VisionSettings.OFF;
     private static final AtomicBoolean inFlight = new AtomicBoolean(false);
     private static final java.util.concurrent.ExecutorService WORKER =
             Executors.newSingleThreadExecutor(r -> {
@@ -84,6 +89,26 @@ public final class AiHost {
         return capability.compact();
     }
 
+    /** 工具层取后端（壳注入，见 {@code Ctx.visionBackend()}）。 */
+    public static io.github.piwugu.snowleopard.tools.VisionBackend visionBackend() {
+        return visionBackend;
+    }
+
+    /** 截图宽（服务端权威，客户端不许读自己的本地配置）。 */
+    public static int visionWidth() {
+        return visionCfg.width();
+    }
+
+    /** 截图高。 */
+    public static int visionHeight() {
+        return visionCfg.height();
+    }
+
+    /** 自测用：直接排一张"已就绪"的图（等价于一次极快的 capture），不经过后端。 */
+    public static void visionReplayForTest(String model, String file) {
+        VisionPending.replay(model, file);
+    }
+
     /**
      * 装配。配置文件不存在 = host 停用（如实记日志，不降级成假执行）。
      * **只在客户端验收模式接线**：全量自测模式里自测自己数 pending，host 会把请求消费掉造成假失败
@@ -105,6 +130,17 @@ public final class AiHost {
             store = new ConversationStore(core.ids().root());   // root() 就是 ids 根，不要再拼 "ids"
             maxRounds = cfg.maxRounds();
             historyWindow = cfg.historyWindow();
+            visionCfg = cfg.vision();
+            // 后端只认 stub（P3）/ client（P4 未实现）。stub 是**假画面**，只许验收模式用
+            if ("stub".equals(cfg.vision().backend()) && Boolean.getBoolean("snowleopard.clienttest")) {
+                visionBackend = new StubVisionBackend(
+                        m -> core == null ? null : core.ids().home(m).resolve("vision"),
+                        cfg.vision()::maxCaptures, cfg.vision()::keepImages);
+                SnowLeopardMod.LOG.warn("[雪豹框架][host] 视觉后端=测试桩（画面是假的，仅验收用）");
+            } else if ("client".equals(cfg.vision().backend())) {
+                SnowLeopardMod.LOG.warn("[雪豹框架][host] vision.backend=client 尚未接入（P4）——按不可用处理");
+            }
+            // 能力级必须在后端定下之后再算（否则 L0/L2 会算错——"该 L1 报成 L0"比没能力更坏）
             capability = computeCapability(cfg);
             SnowLeopardMod.LOG.info("[雪豹框架][host] AI 执行端就绪（{} 家提供商，轮次预算 {}）",
                     cfg.providers().size(), cfg.maxRounds());
@@ -131,12 +167,10 @@ public final class AiHost {
     private static VisionCapability computeCapability(LlmConfig cfg) {
         String backend = cfg.vision().backend();
         boolean enabled = cfg.vision().enabled();
-        boolean stub = enabled && "stub".equals(backend);
-        if (stub && !Boolean.getBoolean("snowleopard.clienttest")) {
-            SnowLeopardMod.LOG.warn("[雪豹框架][host] vision.backend=stub 只许客户端验收模式使用——按不可用处理");
-            stub = false;
-        }
-        boolean render = stub;   // 只有 stub 真的能出图；client 后端 P4 才实现
+        // 能不能渲染以**后端真实可用性**为准，不看配置字面——配置写了 client 但没实现，
+        // 就不能报 L0（那会让模型以为拍得到，然后等一张永远不来的图）
+        boolean render = visionBackend != null && visionBackend.available();
+        boolean stub = render && "stub".equals(backend);
         String reason = !enabled
                 ? "视觉未启用（vision.enabled=false）"
                 : "client".equals(backend) ? "渲染后端（客户端离屏渲染）尚未接入"
@@ -213,6 +247,7 @@ public final class AiHost {
             return;
         }
         MemoryRecorder.Scope rec = MemoryRecorder.begin(core, model);
+        VisionPending.beginSession(model);      // 截图预算按会话重置
         try {
             String outcome = converse(core, model, req, rec);
             core.wake().complete(req.reqId(), true, outcome);
@@ -229,6 +264,8 @@ public final class AiHost {
             rec.finish();
             core.wake().complete(req.reqId(), false, String.valueOf(e.getMessage()));
         } finally {
+            // 会话结束还有在渲染的 → 转 DEFERRED（**不重试唤醒**，下次会话开头捎带）
+            VisionPending.deferStillPending(model);
             WakeBridge.endSession(model);
         }
     }
@@ -267,6 +304,8 @@ public final class AiHost {
         messages.add(userMsg);
         store.append(model, userMsg);
         rec.user(user.toString());
+        // 上次会话遗留的截图（DEFERRED）在这里捎带——**单一注入点**，不另开一处拼
+        injectVision(model, messages);
 
         // ② 工具循环
         List<Map<String, Object>> tools = toolSchemas(core);
@@ -299,6 +338,9 @@ public final class AiHost {
                 finalText = "（轮次预算 " + maxRounds + " 耗尽，强制收束）";
                 rec.note(finalText);
             }
+            // 工具跑完、下一轮 chat 之前：把**已就绪**的截图注进去（轮内注入，零等待）。
+            // 这一步不做任何阻塞——图没好就留到下一轮/下次会话，绝不在这等渲染。
+            injectVision(model, messages);
         }
 
         // ③ 收尾：真被模型看到了才记账（推成功才 ack——同一铁律）
@@ -511,6 +553,62 @@ public final class AiHost {
 
     private static String str(Object o) {
         return o == null ? "" : String.valueOf(o);
+    }
+
+    /**
+     * 把待投递的视觉结果注进当前 {@code messages}（**不写 history、不进记忆**）。
+     *
+     * <p>两条纪律：
+     * <ul>
+     *   <li>**不阻塞**：只取已经就绪的，没好的留到下一轮/下次会话——绝不等渲染；</li>
+     *   <li>**不落盘历史**：base64 进 `history.jsonl` 会爆（那个文件 append-only 只增不减），
+     *       也不进 `MemoryRecorder`（400 字符截断会把 data URI 变成垃圾）。</li>
+     * </ul>
+     */
+    private static void injectVision(String model, List<Map<String, Object>> messages) {
+        List<VisionPending.Rec> recs = VisionPending.drain(model);
+        if (recs.isEmpty()) {
+            return;
+        }
+        boolean canSee = capability.canSeeImages();
+        for (VisionPending.Rec r : recs) {
+            if (r.state() == VisionPending.State.FAILED
+                    || r.state() == VisionPending.State.DROPPED) {
+                messages.add(Map.of("role", "user", "content", "（系统注入）"
+                        + (r.state() == VisionPending.State.FAILED
+                        ? "截图 #" + r.reqId() + " 失败：" + r.reason()
+                        : r.reason())));
+                continue;
+            }
+            messages.add(visionMessage(r, canSee));
+            SnowLeopardMod.LOG.info("[雪豹框架][视觉] 注入 {} → {}（canSee={}）",
+                    r.reqId(), r.file(), canSee);
+        }
+    }
+
+    private static Map<String, Object> visionMessage(VisionPending.Rec r, boolean canSee) {
+        String name = r.file() == null ? "?"
+                : java.nio.file.Path.of(r.file()).getFileName().toString();
+        String head = "（系统注入）你申请的截图已就绪：" + name;
+        if (r.source() != null && r.source().contains("stub")) {
+            head += "（**测试桩，不是真实世界**）";
+        }
+        if (!canSee) {
+            // 没有视觉能力就必须**明说**：给它 base64 等于让它读到一堆乱码，比不给更坏
+            return Map.of("role", "user", "content", head
+                    + "。但当前模型没有查看图像的能力，你看不到画面内容——"
+                    + "需要空间信息请用 vision/scan，并说明这是推断。");
+        }
+        try {
+            byte[] png = java.nio.file.Files.readAllBytes(java.nio.file.Path.of(r.file()));
+            String b64 = java.util.Base64.getEncoder().encodeToString(png);
+            return Map.of("role", "user", "content", List.of(
+                    Map.of("type", "text", "text", head + "。"),
+                    Map.of("type", "image_url",
+                            "image_url", Map.of("url", "data:image/png;base64," + b64))));
+        } catch (Exception e) {
+            return Map.of("role", "user", "content", head + "，但读取失败：" + e.getMessage());
+        }
     }
 
     /**

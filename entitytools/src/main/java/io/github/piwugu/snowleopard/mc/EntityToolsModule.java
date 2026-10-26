@@ -52,6 +52,21 @@ public final class EntityToolsModule {
         default java.nio.file.Path visionDir() {
             return null;
         }
+
+        /** 视觉渲染后端（壳注入：stub 测试桩 / 客户端离屏渲染）；缺省 = 不可用。 */
+        default io.github.piwugu.snowleopard.tools.VisionBackend visionBackend() {
+            return io.github.piwugu.snowleopard.tools.VisionBackend.NONE;
+        }
+
+        /** 截图宽（宿主配置下发，**客户端不许读自己的本地配置**，否则尺寸对不上）。 */
+        default int visionWidth() {
+            return 384;
+        }
+
+        /** 截图高。 */
+        default int visionHeight() {
+            return 216;
+        }
     }
 
     private final String modelId;
@@ -171,6 +186,8 @@ public final class EntityToolsModule {
                 };
                 case io.github.piwugu.snowleopard.tools.GroupNames.VISION -> switch (tool) {
                     case ToolSchemas.VISION_SCAN -> visionScan(params);
+                    case ToolSchemas.VISION_SHOT -> visionShot();
+                    case ToolSchemas.VISION_SHOW -> visionShow(params);
                     default -> Result.error("vision 组无此工具: " + tool);
                 };
                 case io.github.piwugu.snowleopard.tools.GroupNames.WATCH -> switch (tool) {
@@ -440,6 +457,78 @@ public final class EntityToolsModule {
         String cap = ctx.visionStatus();
         return Result.ok(VisionScan.scan(level, self, params, ctx.visionDir(),
                 cap == null ? "level=unknown（宿主未接能力上报）" : cap));
+    }
+
+    /**
+     * C 档：申请一张载体 POV 截图（**异步受理**）。
+     *
+     * <p>立刻返回编号，画面由后端渲染完成后**自动注入下一轮**——模型不许在这轮等
+     * （等就等于把一次 GPU 帧 + 网络往返塞进服务端主线程，会卡 tick）。
+     *
+     * <p>失败必须**当场**说清楚并指路：没有后端/客户端 → 让模型改用 {@code vision/scan}，
+     * 而不是给它一个"稍后应该有"的空头承诺。
+     */
+    Result visionShot() {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——视觉需要载体（当前: " + sense.state() + "）");
+        }
+        io.github.piwugu.snowleopard.tools.VisionBackend backend = ctx.visionBackend();
+        if (backend == null || !backend.available()) {
+            String cap = ctx.visionStatus();
+            return Result.error("当前没有可用的截图后端（" + (cap == null ? "未知" : cap)
+                    + "）——改用 vision/scan 获取视线方向的方块与实体");
+        }
+        if (backend.inFlight(modelId)) {
+            // 不排队：排队=把失败变成稍后执行，而模型会以为两枪都在路上
+            return Result.warn("上一张仍在渲染中，本次未受理（不排队）", "等它注入后再申请");
+        }
+        try {
+            net.minecraft.world.phys.Vec3 eye = self.getEyePosition(1.0f);
+            String reqId = backend.request(new io.github.piwugu.snowleopard.tools.VisionBackend.Shot(
+                    modelId, ctx.visionWidth(), ctx.visionHeight(),
+                    eye.x, eye.y, eye.z, self.getYRot(), self.getXRot()));
+            Map<String, Object> d = new java.util.LinkedHashMap<>();
+            d.put("reqId", reqId);
+            d.put("state", "REQUESTED");
+            d.put("size", ctx.visionWidth() + "x" + ctx.visionHeight());
+            d.put("note", "画面稍后自动注入（本轮内或下一轮）；不要重复申请，也不要在这轮等");
+            String cap = ctx.visionStatus();
+            if (cap != null) {
+                d.put("capability", cap);
+            }
+            return Result.ok(d);
+        } catch (IllegalStateException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /** 重看已落盘的图（不重渲、不耗 GPU）：把文件重新排队注入。 */
+    Result visionShow(Map<String, Object> params) {
+        io.github.piwugu.snowleopard.tools.VisionBackend backend = ctx.visionBackend();
+        if (backend == null || !backend.available()) {
+            return Result.error("当前没有可用的视觉后端——改用 vision/scan");
+        }
+        java.nio.file.Path dir = ctx.visionDir();
+        if (dir == null) {
+            return Result.error("没有可读的视觉目录（宿主未注入）");
+        }
+        String id = params.get("cap_id") == null ? null : String.valueOf(params.get("cap_id")).trim();
+        java.nio.file.Path file = io.github.piwugu.snowleopard.tools.VisionFiles.findLatest(dir, id);
+        if (file == null) {
+            return Result.error("没有找到截图" + (id == null || id.isBlank() ? "" : " #" + id)
+                    + "——先用 vision/capture 拍，或 vision/scan detail=image");
+        }
+        backend.show(modelId, file);
+        Map<String, Object> d = new java.util.LinkedHashMap<>();
+        d.put("state", "READY");
+        d.put("file", file.getFileName().toString());
+        d.put("note", "已排队，下一轮注入");
+        String cap = ctx.visionStatus();
+        if (cap != null) {
+            d.put("capability", cap);
+        }
+        return Result.ok(d);
     }
 
     /**

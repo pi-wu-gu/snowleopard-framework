@@ -126,6 +126,22 @@ public final class EntityToolsRuntime {
                     return null;
                 }
             }
+
+            /** 视觉后端（stub / 客户端离屏渲染）由 host 决定；工具层只消费。 */
+            @Override
+            public io.github.piwugu.snowleopard.tools.VisionBackend visionBackend() {
+                return io.github.piwugu.snowleopard.host.AiHost.visionBackend();
+            }
+
+            @Override
+            public int visionWidth() {
+                return io.github.piwugu.snowleopard.host.AiHost.visionWidth();
+            }
+
+            @Override
+            public int visionHeight() {
+                return io.github.piwugu.snowleopard.host.AiHost.visionHeight();
+            }
         }));
     }
 

@@ -459,6 +459,49 @@ final class ClientSmokeTest {
         avatar.setYHeadRot(yaw0);
         saved.forEach((p, st) -> level.setBlock(p, st, 2));
 
+        //    (m) 视觉 C 档异步管线（v1.12.6）：受理即返回 → 回执落盘 → 第二枪被拦 → show 重看。
+        //        本版后端是**测试桩**（画面是假的），验的是管线而不是画面质量。
+        var capRes = EntityToolsRuntime.dispatch(model, "vision", "shot", Map.of());
+        String capTxt = String.valueOf(capRes instanceof snowleopard.core.result.Result.Ok o
+                ? o.data() : capRes);
+        ok("视觉截图受理即返回（异步，不阻塞会话）",
+                capTxt.contains("REQUESTED") && capTxt.contains("reqId"), brief(capRes));
+
+        var capAgain = EntityToolsRuntime.dispatch(model, "vision", "shot", Map.of());
+        ok("连发第二枪被拦（不排队——排队=把失败变成稍后执行）",
+                capAgain instanceof snowleopard.core.result.Result.Warn, brief(capAgain));
+
+        try {
+            Thread.sleep(500);      // 测试桩模拟渲染 150ms；这里给足余量
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+        java.nio.file.Path shot = null;
+        for (var r : io.github.piwugu.snowleopard.host.VisionPending.drain(model)) {
+            if (r.state() == io.github.piwugu.snowleopard.host.VisionPending.State.READY) {
+                shot = r.file() == null ? null : java.nio.file.Path.of(r.file());
+            }
+        }
+        boolean pngOk = false;
+        if (shot != null && java.nio.file.Files.isRegularFile(shot)) {
+            try {
+                byte[] b = java.nio.file.Files.readAllBytes(shot);
+                pngOk = b.length > 8 && (b[0] & 0xFF) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G';
+            } catch (java.io.IOException e) {
+                pngOk = false;
+            }
+        }
+        ok("截图回执落盘（PNG 真存在且签名正确）", pngOk, "file=" + shot);
+
+        var showRes = EntityToolsRuntime.dispatch(model, "vision", "show", Map.of());
+        boolean replay = false;
+        for (var r : io.github.piwugu.snowleopard.host.VisionPending.drain(model)) {
+            replay |= r.state() == io.github.piwugu.snowleopard.host.VisionPending.State.READY
+                    && "replay".equals(r.source());
+        }
+        ok("vision/show 重看已落盘图（source=replay，不重渲不耗 GPU）",
+                showRes instanceof snowleopard.core.result.Result.Ok && replay, brief(showRes));
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {

@@ -299,8 +299,18 @@ public final class ToolSchemas {
     // ── vision（视觉，2026-10-27 06:05 (UTC+8)：B 档射线；C 档截图见后续版本）──
     /** 视线射线扫描：服务端出结果，任何距离都成立（C 档真截图在远处会拍到虚空）。 */
     public static final String VISION_SCAN = "scan";
+    /**
+     * 载体 POV 截图：**异步受理**，返回 reqId，画面稍后注入（不能同步等渲染）。
+     *
+     * <p>叫 {@code shot} 而不是 {@code capture}：后者已被 {@code interact/capture}（抓蝙蝠）占用。
+     * 暴露名会带组前缀（{@code vision_shot} vs {@code interact_capture}），但模型对同名工具
+     * 天然容易混——**同一套工具里不出现两个 capture**。
+     */
+    public static final String VISION_SHOT = "shot";
+    /** 重看已落盘的图：不重渲、不耗 GPU。 */
+    public static final String VISION_SHOW = "show";
 
-    /** vision 组清单（本版 1 工具；capture/show 随 C 档异步管线加入）。 */
+    /** vision 组清单（3 工具）。 */
     public static final java.util.List<ToolRegistry.Tool> VISION_TOOLS = java.util.List.of(
             new ToolRegistry.Tool(VISION_SCAN,
                     "沿视线射线扫描：中心/左右/上下各命中什么方块（含距离、方块 id、颜色、面），近处实体与可选色块图",
@@ -310,7 +320,16 @@ public final class ToolSchemas {
                             "range", "射线距离（4..64，缺省 32）",
                             "detail", "text（缺省）| image（服务端射线色块图）",
                             "width", "仅 image 生效（16..256，缺省 64）",
-                            "height", "仅 image 生效（9..144，缺省 36）")));
+                            "height", "仅 image 生效（9..144，缺省 36）")),
+            new ToolRegistry.Tool(VISION_SHOT,
+                    "申请一张载体自己视角的截图（异步：**立刻返回编号，画面稍后自动注入**，不要在这轮等）",
+                    "vision.capture() → {reqId, state:\"REQUESTED\", note}；无可用渲染客户端时 → Error 并提示改用 vision/scan",
+                    Map.of("type", "object", "note", "无参数（尺寸由服务端配置下发）")),
+            new ToolRegistry.Tool(VISION_SHOW,
+                    "重看已拍过的截图（不重新渲染、不耗 GPU）；不传编号则取最近一张",
+                    "vision.show(cap_id?) → {reqId, state:\"READY\", file}；找不到 → Error 提示先 capture/scan",
+                    Map.of("type", "object",
+                            "cap_id", "截图编号（缺省=最近一张）")));
 
     /** craft 组清单（2 工具）。 */
     public static final java.util.List<ToolRegistry.Tool> CRAFT_TOOLS = java.util.List.of(

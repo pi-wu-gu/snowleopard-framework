@@ -51,8 +51,8 @@ class ToolSchemasMatrixTest {
     @Test
     void twelveGroupsFrozen() {
         assertEquals(13, GroupNames.ALL.size(), "十三组名冻结（组名不冒号；v1.12.5 新增 vision）");
-        assertEquals(45, all().size(),
-                "工具面 13 组 45 工具（v1.12.5：+vision/scan；capture/show 随 C 档加入→47）——超差即清单漂移，须同步接入文档");
+        assertEquals(47, all().size(),
+                "工具面 13 组 47 工具（v1.12.6：vision 组齐了 scan/capture/show）——超差即清单漂移，须同步接入文档");
     }
 
     @Test
