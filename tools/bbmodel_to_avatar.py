@@ -77,6 +77,22 @@ def has_rotation(rot):
     return rot and any(abs(float(x)) > 1e-9 for x in rot)
 
 
+def to_mc_rotation(rot):
+    """
+    Blockbench（Y 向上，右手系）→ Minecraft 模型空间（Y 向下，左手系）。
+
+    **X 与 Z 取反、Y 不变**——从右手系换到左手系，绕 X / Z 的正方向翻转，
+    绕 Y 的两侧同时翻转因而抵消。
+    实测依据（2026-10-27 真机）：tail_1 的 +20° 不取反会向下垂、head_nose 的 −20°
+    会让鼻子朝反方向翘、body_mid 的 2° 也是反的——三个纯 X 部件全部反向。
+
+    漏掉这一步的后果是"模型看着对但不像"：直尾、塌鼻、耳朵垂下来。
+    """
+    if not rot:
+        return (0.0, 0.0, 0.0)
+    return (-float(rot[0]), float(rot[1]), -float(rot[2]))
+
+
 # ---------------------------------------------------------------- 解析
 
 def parse(bb):
@@ -107,7 +123,8 @@ def parse(bb):
             "name": name,
             "parent": parent_name,
             "pivot_bb": origin,
-            "rotation": rotation,
+            "rotation_bb": list(rotation),          # 打印/对照用
+            "rotation": list(to_mc_rotation(rotation)),   # 写进 Java 的值
             "meshes": meshes,
         })
         seen.add(name)
@@ -429,10 +446,12 @@ def footprint(bones):
     lines = []
     for b in bones:
         p = b["pivot_bb"]
-        r = b["rotation"] if has_rotation(b["rotation"]) else [0, 0, 0]
-        lines.append("%-20s parent=%-20s pivot=(%.2f,%.2f,%.2f) rot=(%.1f,%.1f,%.1f) cubes=%d"
+        r = b["rotation_bb"]
+        rmc = b["rotation"]
+        note = "" if not has_rotation(r) else "  rot_mc=(%.1f,%.1f,%.1f)" % (rmc[0], rmc[1], rmc[2])
+        lines.append("%-20s parent=%-20s pivot=(%.2f,%.2f,%.2f) rot_bb=(%.1f,%.1f,%.1f) cubes=%d%s"
                      % (b["name"], str(b["parent"]), p[0], p[1], p[2], r[0], r[1], r[2],
-                        len(b["meshes"])))
+                        len(b["meshes"]), note))
     return lines
 
 
