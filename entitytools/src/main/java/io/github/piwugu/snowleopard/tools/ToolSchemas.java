@@ -296,6 +296,22 @@ public final class ToolSchemas {
     public static final String CRAFT_RECIPES = "craft_recipes";
     public static final String CRAFT = "craft";
 
+    // ── vision（视觉，2026-10-27 06:05 (UTC+8)：B 档射线；C 档截图见后续版本）──
+    /** 视线射线扫描：服务端出结果，任何距离都成立（C 档真截图在远处会拍到虚空）。 */
+    public static final String VISION_SCAN = "scan";
+
+    /** vision 组清单（本版 1 工具；capture/show 随 C 档异步管线加入）。 */
+    public static final java.util.List<ToolRegistry.Tool> VISION_TOOLS = java.util.List.of(
+            new ToolRegistry.Tool(VISION_SCAN,
+                    "沿视线射线扫描：中心/左右/上下各命中什么方块（含距离、方块 id、颜色、面），近处实体与可选色块图",
+                    "vision.scan(range?, detail?, width?, height?) → {source:\"raycast\", capability, center, sides:{left,right,up,down}, entities, delivery}；"
+                            + "detail=text|image；image 只落盘给路径，不回 base64",
+                    Map.of("type", "object",
+                            "range", "射线距离（4..64，缺省 32）",
+                            "detail", "text（缺省）| image（服务端射线色块图）",
+                            "width", "仅 image 生效（16..256，缺省 64）",
+                            "height", "仅 image 生效（9..144，缺省 36）")));
+
     /** craft 组清单（2 工具）。 */
     public static final java.util.List<ToolRegistry.Tool> CRAFT_TOOLS = java.util.List.of(
             new ToolRegistry.Tool(CRAFT_RECIPES, "列可用工作台配方（id/输出/材料清单）",

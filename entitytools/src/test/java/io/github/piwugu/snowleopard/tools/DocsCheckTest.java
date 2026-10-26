@@ -75,6 +75,7 @@ class DocsCheckTest {
         tools += ToolSchemas.CHAT_TOOLS.size();
         tools += ToolSchemas.AVATAR_TOOLS.size();
         tools += ToolSchemas.CRAFT_TOOLS.size();
+        tools += ToolSchemas.VISION_TOOLS.size();
 
         String doc = read("docs/工具组接入文档-2026-10-23.md");
         assertTrue(doc.contains(GroupNames.ALL.size() + " 组 " + tools + " 工具"),

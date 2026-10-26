@@ -423,6 +423,42 @@ final class ClientSmokeTest {
                 vtext.contains("vision") && vtext.contains("level=") && vtext.contains("render="),
                 brief(vres));
 
+        //    (l) 视觉 B 档（v1.12.5）：射线必须**真的沿视线**命中，且转身 180° 后不再命中。
+        //        单向断言抓不到"方向反了"（射线往反方向也照样能命中别的方块），所以必须双向。
+        var eye = avatar.getEyePosition(1.0f);
+        var look = avatar.getViewVector(1.0f);
+        var aimPos = net.minecraft.core.BlockPos.containing(
+                eye.x + look.x * 5, eye.y + look.y * 5, eye.z + look.z * 5);
+        var saved = new java.util.LinkedHashMap<net.minecraft.core.BlockPos,
+                net.minecraft.world.level.block.state.BlockState>();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    var p = aimPos.offset(dx, dy, dz).immutable();
+                    saved.put(p, level.getBlockState(p));
+                    level.setBlock(p, net.minecraft.world.level.block.Blocks.RED_WOOL
+                            .defaultBlockState(), 2);
+                }
+            }
+        }
+        var hitRes = EntityToolsRuntime.dispatch(model, "vision", "scan", Map.of("range", 10));
+        String hitText = String.valueOf(hitRes instanceof snowleopard.core.result.Result.Ok o
+                ? o.data() : hitRes);
+        ok("视觉射线沿视线命中（5 格处红羊毛 + source=raycast）",
+                hitText.contains("minecraft:red_wool") && hitText.contains("raycast"),
+                brief(hitRes));
+        float yaw0 = avatar.getYRot();
+        avatar.setYRot(yaw0 + 180f);
+        avatar.setYHeadRot(avatar.getYRot());
+        var backRes = EntityToolsRuntime.dispatch(model, "vision", "scan", Map.of("range", 10));
+        String backText = String.valueOf(backRes instanceof snowleopard.core.result.Result.Ok o
+                ? o.data() : backRes);
+        ok("视觉射线随朝向改变（转身 180° 后不再命中红羊毛）",
+                !backText.contains("minecraft:red_wool"), brief(backRes));
+        avatar.setYRot(yaw0);
+        avatar.setYHeadRot(yaw0);
+        saved.forEach((p, st) -> level.setBlock(p, st, 2));
+
         // ⑦ 播报玩家测试区坐标（聊天栏可直接看到去哪）
         String area = PlayerTestArea.describe();
         if (area != null) {

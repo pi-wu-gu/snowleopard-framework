@@ -35,10 +35,13 @@ public final class GroupNames {
     public static final String AVATAR = "avatar";
     /** 合成（H4.6）：配方直合成（配方发现 + 扣料/回填；裁决：不要求工作台邻接）。 */
     public static final String CRAFT = "craft";
+    /** 视觉（2026-10-27）：视线射线扫描；C 档真截图随后续版本加入（异步注入）。 */
+    public static final String VISION = "vision";
 
     /** 冻结的全部组名（顺序=实施顺序无关，仅稳定枚举）。 */
     public static final List<String> ALL = List.of(
-            SENSE, ENTITY, ENTITY_SELF, MOVE, VIEW, INTERACT, ITEM, WORLD, WATCH, CHAT, AVATAR, CRAFT);
+            SENSE, ENTITY, ENTITY_SELF, MOVE, VIEW, INTERACT, ITEM, WORLD, WATCH, CHAT, AVATAR, CRAFT,
+            VISION);
 
     private GroupNames() {
     }

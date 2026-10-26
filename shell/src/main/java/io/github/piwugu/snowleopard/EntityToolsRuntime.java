@@ -111,6 +111,21 @@ public final class EntityToolsRuntime {
             public String visionStatus() {
                 return io.github.piwugu.snowleopard.host.AiHost.visionStatusLine();
             }
+
+            /**
+             * 视觉产物目录：{@code ids/<模型>/vision/}——**家目录内，不跨 ID**。
+             * 算不出来就返回 null（工具会降级成"只有文字描述"），**不抛异常**：
+             * 出图是增强，不能因为它让整次扫描失败。
+             */
+            @Override
+            public java.nio.file.Path visionDir() {
+                try {
+                    var c = SnowLeopardMod.core();
+                    return c == null ? null : c.ids().home(id).resolve("vision");
+                } catch (RuntimeException e) {
+                    return null;
+                }
+            }
         }));
     }
 

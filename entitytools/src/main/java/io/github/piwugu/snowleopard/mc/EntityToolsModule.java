@@ -44,6 +44,14 @@ public final class EntityToolsModule {
         default String visionStatus() {
             return null;
         }
+
+        /**
+         * 视觉产物目录（壳侧注入；{@code null} = 不能落图，只给文字描述）。
+         * 放 {@code ids/<模型>/vision/`——**家目录内，不跨 ID**。
+         */
+        default java.nio.file.Path visionDir() {
+            return null;
+        }
     }
 
     private final String modelId;
@@ -160,6 +168,10 @@ public final class EntityToolsModule {
                     case ToolSchemas.CRAFT_RECIPES -> craftRecipes(params);
                     case ToolSchemas.CRAFT -> craft(params);
                     default -> Result.error("craft 组无此工具: " + tool);
+                };
+                case io.github.piwugu.snowleopard.tools.GroupNames.VISION -> switch (tool) {
+                    case ToolSchemas.VISION_SCAN -> visionScan(params);
+                    default -> Result.error("vision 组无此工具: " + tool);
                 };
                 case io.github.piwugu.snowleopard.tools.GroupNames.WATCH -> switch (tool) {
                     case ToolSchemas.WATCH_WATCH -> watchStart(params, controllerOf);
@@ -408,6 +420,26 @@ public final class EntityToolsModule {
             d.put("vision", vision);
         }
         return Result.ok(d);
+    }
+
+    /**
+     * 视觉 B 档：视线射线扫描（纯服务端，**任何距离都成立**，不受"客户端只渲染已加载区块"限制）。
+     *
+     * <p>结果必带 {@code source=raycast} 与 {@code capability}——**不许混称"截图"**。
+     * 颜色取原版 MapColor（材质代表色），没有贴图与光影；模型若把它当实拍，
+     * 就会把"石头代表色是灰的"说成"我看过那块石头"。
+     */
+    Result visionScan(Map<String, Object> params) {
+        LivingEntity self = requireBound();
+        if (self == null) {
+            return Result.error("感官未开启或未绑定——视觉需要载体（当前: " + sense.state() + "）");
+        }
+        if (!(self.level() instanceof ServerLevel level)) {
+            return Result.error("绑定实体不在服务端世界，无法射线扫描");
+        }
+        String cap = ctx.visionStatus();
+        return Result.ok(VisionScan.scan(level, self, params, ctx.visionDir(),
+                cap == null ? "level=unknown（宿主未接能力上报）" : cap));
     }
 
     /**
