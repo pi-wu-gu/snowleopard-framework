@@ -180,8 +180,8 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
 
         PartDefinition eyePupilLeft = eyes.addOrReplaceChild("eye_pupil_left",
                 CubeListBuilder.create()
-                .texOffs(45, 63)
-                .addBox(-0.5F, -0.5F, -0.025F, 1F, 1F, 0.05F, new CubeDeformation(0F)),
+                .texOffs(2, 1)
+                .addBox(-0.5F, -0.5F, 0F, 1F, 1F, 1F, new CubeDeformation(0F)),
                 PartPose.offset(-2F, -4.5F, -6.175F));
 
         PartDefinition eyeLidRight = eyes.addOrReplaceChild("eye_lid_right",
@@ -192,8 +192,8 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
 
         PartDefinition eyePupilRight = eyes.addOrReplaceChild("eye_pupil_right",
                 CubeListBuilder.create()
-                .texOffs(48, 63)
-                .addBox(-0.5F, -0.5F, -0.025F, 1F, 1F, 0.05F, new CubeDeformation(0F)),
+                .texOffs(2, 1)
+                .addBox(-0.5F, -0.5F, 0F, 1F, 1F, 1F, new CubeDeformation(0F)),
                 PartPose.offset(2F, -4.5F, -6.175F));
 
         PartDefinition legFrontLeft = body.addOrReplaceChild("leg_front_left",
@@ -318,8 +318,8 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
 
         // 耳朵：低频抖动
         float flick = Mth.cos(ageInTicks * 0.1F) * 0.05F;
-        this.earLeft.zRot = 0.3491F + flick;
-        this.earRight.zRot = -0.3491F - flick;
+        this.earRight.zRot = -0.3491F + flick;
+        this.earLeft.zRot = 0.3491F - flick;
 
         // 眨眼：眼皮默认隐藏（本模型眼皮与眼白同尺寸，静态显示会盖住眼睛），
         // 每 100 tick 眨一次、闭合 4 tick。要改成"默认闭合"只翻转两个分支即可。
@@ -330,10 +330,10 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
         // 瞳孔：随头部朝向做微小偏移（±0.2px），几何修好后立即可见
         float gazeX = Mth.clamp(netHeadYaw * 0.008F, -0.2F, 0.2F);
         float gazeY = Mth.clamp(headPitch * 0.006F, -0.15F, 0.15F);
-        this.eyePupilLeft.x = gazeX;
-        this.eyePupilLeft.y = gazeY;
         this.eyePupilRight.x = gazeX;
         this.eyePupilRight.y = gazeY;
+        this.eyePupilLeft.x = gazeX;
+        this.eyePupilLeft.y = gazeY;
 
         // 下颚：jawOpen 0=闭 1=张，由宿主状态（被打/说话/进食）驱动
         this.jaw.xRot = 0.1745F - this.jawOpen * 0.45F;
