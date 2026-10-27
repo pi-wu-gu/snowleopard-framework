@@ -76,8 +76,11 @@ public final class SnowLeopardMod {
                     Names.SourceType.MOD, SnowLeopardMod.class.getClassLoader());
 
             // entitytools 骨架显式装配（M0：壳=装配点；不走 ServiceLoader，装配路径一眼可见）
+            // vision 组受 vision.enabled 控制（关掉=工具面回落 44）；开关读不到就按关闭处理——
+            // 没有 LLM 配置时不存在"谁来看图"，注册三个用不上的工具只会占清单
+            boolean visionOn = io.github.piwugu.snowleopard.host.AiHost.visionEnabled(gameDir);
             List<String> wired = new java.util.ArrayList<>();
-            for (snowleopard.core.spi.ToolGroupProvider p : EntityToolsProvider.skeletons()) {
+            for (snowleopard.core.spi.ToolGroupProvider p : EntityToolsProvider.skeletons(visionOn)) {
                 String full = core.loader().load(p, Names.SourceType.MOD);
                 if (full != null) {
                     wired.add(full);

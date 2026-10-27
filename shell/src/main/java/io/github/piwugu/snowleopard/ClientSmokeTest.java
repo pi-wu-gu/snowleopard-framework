@@ -431,6 +431,17 @@ final class ClientSmokeTest {
                 vline.contains("level=L0") && vline.contains("vlm=true") && vline.contains("render=true"),
                 vline);
 
+        //    (k3) 视觉工具暴露名自解释（v1.12.9）：scan/shot/show 三个名字都不重名，按"重名才带前缀"
+        //        会被**裸暴露**成 `shot` —— 清单里躺着一个叫 shot 的工具，模型不会把它和"看图"联系起来
+        //        （用户实测："模型似乎并不知道如何使用视觉"）。这里断言暴露名带 vision_ 前缀，
+        //        且能正确换回注册真名（暴露名≠真名，两处口径必须分家，回执行面必须换回真名）。
+        String shotReal = io.github.piwugu.snowleopard.host.AiHost.realNameOf("vision_shot");
+        ok("视觉工具暴露名自解释（vision_shot/scan/show 均可换回真名）",
+                "shot".equals(shotReal)
+                        && "scan".equals(io.github.piwugu.snowleopard.host.AiHost.realNameOf("vision_scan"))
+                        && "show".equals(io.github.piwugu.snowleopard.host.AiHost.realNameOf("vision_show")),
+                "vision_shot→" + shotReal);
+
         //    (l) 视觉 B 档（v1.12.5）：射线必须**真的沿视线**命中，且转身 180° 后不再命中。
         //        单向断言抓不到"方向反了"（射线往反方向也照样能命中别的方块），所以必须双向。
         var eye = avatar.getEyePosition(1.0f);

@@ -80,6 +80,25 @@ public final class AiHost {
     }
 
     /**
+     * 视觉工具组要不要注册（装配期调用，早于 {@link #init}）。
+     *
+     * <p>只读配置，不初始化任何东西：`vision.enabled=false` 或没有配置文件 → 不注册，
+     * 工具面回落 44。配置坏了也按关闭处理——**不能因为一个坏 json 让整个 mod 起不来**，
+     * 真正的报错由 {@link #init} 如实打出来。
+     */
+    public static boolean visionEnabled(Path gameDir) {
+        Path f = gameDir.resolve("config").resolve("snowleopard-llm.json");
+        if (!java.nio.file.Files.isRegularFile(f)) {
+            return false;
+        }
+        try {
+            return LlmConfig.load(f).vision().renderAvailable();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
      * 视觉能力紧凑串（{@code view/status} 用）。
      *
      * <p>**永远给得出话**：没启用也要说明为什么（"视觉未启用（vision.enabled=false）"），
@@ -421,7 +440,13 @@ public final class AiHost {
             for (ToolRegistry.Tool t : g.tools()) {
                 // 前缀用下划线：OpenAI 兼容端点的 function.name 只允许 [a-zA-Z0-9_-]
                 // （点号会被 DeepSeek/MiMo 400 "does not match pattern"——2026-10-24 04:30 踩过）
-                String exposed = counts.getOrDefault(t.name(), 0) > 1
+                //
+                // **vision 组强制带前缀**（2026-10-27 13:20 (UTC+8)）：scan/shot/show 三个名字
+                // 都不重名，按"重名才带前缀"会被裸暴露成 `shot`——清单里躺着一个叫 shot 的工具，
+                // 模型根本不会把它和"看图/视觉"联系起来，于是"能看图却从不调用"。
+                // 名字必须自解释，且描述里写的用法要与暴露名同形（否则模型按描述去调，永远失败）。
+                boolean force = "vision".equals(shortGroup);
+                String exposed = force || counts.getOrDefault(t.name(), 0) > 1
                         ? shortGroup + "_" + t.name() : t.name();
                 Entry prev = TOOLS.putIfAbsent(exposed, new Entry(shortGroup, t));
                 if (prev != null) {
@@ -612,7 +637,10 @@ public final class AiHost {
             byte[] png = java.nio.file.Files.readAllBytes(java.nio.file.Path.of(r.file()));
             String b64 = java.util.Base64.getEncoder().encodeToString(png);
             return Map.of("role", "user", "content", List.of(
-                    Map.of("type", "text", "text", head + "。"),
+                    // **必须说清"下面就是图本身"**：只说"截图已就绪：xxx.png"，模型会以为那是个路径，
+                    // 于是再去申请一张（2026-10-27 实测：step-1o-turbo-vision 会照做 vision_shot）
+                    Map.of("type", "text", "text", head
+                            + "。**下面这张图就是画面本身，你可以直接看到内容**；看完直接作答，不要再申请同一张。"),
                     Map.of("type", "image_url",
                             "image_url", Map.of("url", "data:image/png;base64," + b64))));
         } catch (Exception e) {

@@ -37,10 +37,18 @@ public final class EntityToolsProvider extends ToolGroupProvider.Simple {
     }
 
     /**
-     * 九个冻结组名的提供者（M1 起 sense/entity/entity_self 带真实清单，其余随 M2–M6 填充）。
+     * 工具组提供者清单（M1 起的冻结组名；vision 组 v1.12.9 才真正挂上）。
+     *
+     * <p>**2026-10-27 13:25 (UTC+8) 踩过**：{@code ToolSchemas.VISION_TOOLS} 从 v1.12.5 起就定义好了，
+     * 但这里一直没把它挂进任何组 → 三个视觉工具**从未进入 LLM 工具清单**。
+     * 验收脚本直接按注册名 {@code dispatch("vision","shot")} 派发，绕过了"模型能不能看见"这一层，
+     * 于是 30 条断言全绿、模型却根本不知道有视觉这回事（用户实测："模型似乎并不知道如何使用视觉"）。
+     * 教训：**"工具能执行"与"工具对模型可见"是两件事**，断言必须走清单（暴露名）而不是执行面注册名。
+     *
+     * @param withVision 是否挂 vision 组（由 {@code vision.enabled} 决定；关掉=工具面回落 44）
      */
-    public static List<EntityToolsProvider> skeletons() {
-        return List.of(
+    public static List<EntityToolsProvider> skeletons(boolean withVision) {
+        List<EntityToolsProvider> groups = new java.util.ArrayList<>(List.of(
                 new EntityToolsProvider(GroupNames.SENSE, "entity/sense",
                         "感官开关与候选选取", ToolSchemas.SENSE_TOOLS),
                 new EntityToolsProvider(GroupNames.ENTITY, "entity/life",
@@ -55,7 +63,17 @@ public final class EntityToolsProvider extends ToolGroupProvider.Simple {
                 new EntityToolsProvider(GroupNames.WATCH, "watch", "动态感知（含绑定实体，带控制模型编号）", ToolSchemas.WATCH_TOOLS),
                 new EntityToolsProvider(GroupNames.CHAT, "chat", "聊天：注入未读 / 发言 / 检索（M12）", ToolSchemas.CHAT_TOOLS),
                 new EntityToolsProvider(GroupNames.AVATAR, "avatar", "载体：绑定 / 定时唤醒（M13）", ToolSchemas.AVATAR_TOOLS),
-                new EntityToolsProvider(GroupNames.CRAFT, "craft", "合成：配方发现 + 直合成（H4.6）", ToolSchemas.CRAFT_TOOLS));
+                new EntityToolsProvider(GroupNames.CRAFT, "craft", "合成：配方发现 + 直合成（H4.6）", ToolSchemas.CRAFT_TOOLS)));
+        if (withVision) {
+            groups.add(new EntityToolsProvider(GroupNames.VISION, "vision",
+                    "视觉：射线扫描 / 申请截图 / 重看已拍图", ToolSchemas.VISION_TOOLS));
+        }
+        return groups;
+    }
+
+    /** 默认挂全组（测试与全量场景）。 */
+    public static List<EntityToolsProvider> skeletons() {
+        return skeletons(true);
     }
 
     /** 冻结的参数 schema 键（M1 起工具 params 用语，防各组各写一套）。 */

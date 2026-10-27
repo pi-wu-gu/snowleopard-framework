@@ -310,11 +310,17 @@ public final class ToolSchemas {
     /** 重看已落盘的图：不重渲、不耗 GPU。 */
     public static final String VISION_SHOW = "show";
 
-    /** vision 组清单（3 工具）。 */
+    /** vision 组清单（3 工具）。
+     *
+     * <p><b>描述里写的调用名必须与 LLM 侧暴露名同形</b>（`vision_scan` / `vision_shot` / `vision_show`）：
+     * 2026-10-27 实证，旧描述写的是 `vision.capture()`，而暴露名是裸名 `shot` →
+     * 模型按描述去调不存在的东西，于是"能看图却从不调用"。
+     */
     public static final java.util.List<ToolRegistry.Tool> VISION_TOOLS = java.util.List.of(
             new ToolRegistry.Tool(VISION_SCAN,
-                    "沿视线射线扫描：中心/左右/上下各命中什么方块（含距离、方块 id、颜色、面），近处实体与可选色块图",
-                    "vision.scan(range?, detail?, width?, height?) → {source:\"raycast\", capability, center, sides:{left,right,up,down}, entities, delivery}；"
+                    "沿视线射线扫描正前方：中心/上下左右各命中什么方块（id、距离、颜色、面）与近处实体。"
+                            + "不依赖任何客户端，任何距离都有效——想看'那边有什么'但没客户端/离得远时用它",
+                    "vision_scan(range?, detail?, width?, height?) → {source:\"raycast\", capability, center, sides:{left,right,up,down}, entities, delivery}；"
                             + "detail=text|image；image 只落盘给路径，不回 base64",
                     Map.of("type", "object",
                             "range", "射线距离（4..64，缺省 32）",
@@ -322,12 +328,15 @@ public final class ToolSchemas {
                             "width", "仅 image 生效（16..256，缺省 64）",
                             "height", "仅 image 生效（9..144，缺省 36）")),
             new ToolRegistry.Tool(VISION_SHOT,
-                    "申请一张载体自己视角的截图（异步：**立刻返回编号，画面稍后自动注入**，不要在这轮等）",
-                    "vision.capture() → {reqId, state:\"REQUESTED\", note}；无可用渲染客户端时 → Error 并提示改用 vision/scan",
+                    "申请一张**你自己视角**的真实截图（能看清颜色、形状、文字、生物）。"
+                            + "异步：立刻返回编号，画面在**下一轮自动注入**——本轮不要等、不要重复申请。"
+                            + "需要判断'这是什么颜色/那是什么东西/门在哪边'这类看得见才说得准的问题时用",
+                    "vision_shot() → {reqId, state:\"REQUESTED\", note}；无可用渲染客户端时 → Error 并提示改用 vision_scan",
                     Map.of("type", "object", "note", "无参数（尺寸由服务端配置下发）")),
             new ToolRegistry.Tool(VISION_SHOW,
-                    "重看已拍过的截图（不重新渲染、不耗 GPU）；不传编号则取最近一张",
-                    "vision.show(cap_id?) → {reqId, state:\"READY\", file}；找不到 → Error 提示先 capture/scan",
+                    "重看已拍过的截图（不重新渲染、不耗 GPU）；不传编号则取最近一张。"
+                            + "上一轮注入的图画质/细节不够、想再对照时可以再取一次",
+                    "vision_show(cap_id?) → {reqId, state:\"READY\", file}；找不到 → Error 提示先 vision_shot/vision_scan",
                     Map.of("type", "object",
                             "cap_id", "截图编号（缺省=最近一张）")));
 
