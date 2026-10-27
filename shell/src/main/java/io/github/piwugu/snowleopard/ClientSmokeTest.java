@@ -442,6 +442,18 @@ final class ClientSmokeTest {
                         && "show".equals(io.github.piwugu.snowleopard.host.AiHost.realNameOf("vision_show")),
                 "vision_shot→" + shotReal);
 
+        //    (k4) 工具分组按话题排序（v1.12.10）：79 个工具平铺时模型对**清单末尾**视而不见
+        //        （实测：vision 在末位 → deepseek-flash 一次都没调；移到最前 → 稳定命中）。
+        //        这条断言的是"分组真的参与了排序"，不是"分组字段存在"。
+        var gVision = io.github.piwugu.snowleopard.host.AiHost.routedGroupsForTest("你前面那面墙是什么颜色？");
+        var gMove = io.github.piwugu.snowleopard.host.AiHost.routedGroupsForTest("走过去把箱子里的东西捡起来");
+        boolean grouped = !gVision.isEmpty() && "vision".equals(gVision.get(0))
+                && gMove.indexOf("move") >= 0 && gMove.indexOf("move") <= 3
+                && gMove.indexOf("item") >= 0 && gMove.indexOf("item") <= 3;
+        ok("工具分组按话题生效（视觉常驻最前，移动/物品话题相应提前）", grouped,
+                "视觉话题=" + gVision.subList(0, Math.min(3, gVision.size()))
+                        + " · 移动话题=" + gMove.subList(0, Math.min(4, gMove.size())));
+
         //    (l) 视觉 B 档（v1.12.5）：射线必须**真的沿视线**命中，且转身 180° 后不再命中。
         //        单向断言抓不到"方向反了"（射线往反方向也照样能命中别的方块），所以必须双向。
         var eye = avatar.getEyePosition(1.0f);

@@ -48,7 +48,16 @@ public final class EntityToolsProvider extends ToolGroupProvider.Simple {
      * @param withVision 是否挂 vision 组（由 {@code vision.enabled} 决定；关掉=工具面回落 44）
      */
     public static List<EntityToolsProvider> skeletons(boolean withVision) {
-        List<EntityToolsProvider> groups = new java.util.ArrayList<>(List.of(
+        List<EntityToolsProvider> groups = new java.util.ArrayList<>();
+        // **vision 排最前**（2026-10-27 13:50 (UTC+8)）：模型对清单**末尾**的工具视而不见。
+        // 实测（deepseek-flash / mimo-v2.6-flash / step-1o-turbo-vision，78 个工具、同一问法）：
+        // vision 在末位时前两家**一次都没调**（转头去调 status_all / chat_pull），移到最前后才命中。
+        // 顺序不影响功能，只影响"模型记不记得有这么个东西"，所以重要的放前面。
+        if (withVision) {
+            groups.add(new EntityToolsProvider(GroupNames.VISION, "vision",
+                    "视觉：射线扫描 / 申请截图 / 重看已拍图", ToolSchemas.VISION_TOOLS));
+        }
+        groups.addAll(List.of(
                 new EntityToolsProvider(GroupNames.SENSE, "entity/sense",
                         "感官开关与候选选取", ToolSchemas.SENSE_TOOLS),
                 new EntityToolsProvider(GroupNames.ENTITY, "entity/life",
@@ -64,10 +73,6 @@ public final class EntityToolsProvider extends ToolGroupProvider.Simple {
                 new EntityToolsProvider(GroupNames.CHAT, "chat", "聊天：注入未读 / 发言 / 检索（M12）", ToolSchemas.CHAT_TOOLS),
                 new EntityToolsProvider(GroupNames.AVATAR, "avatar", "载体：绑定 / 定时唤醒（M13）", ToolSchemas.AVATAR_TOOLS),
                 new EntityToolsProvider(GroupNames.CRAFT, "craft", "合成：配方发现 + 直合成（H4.6）", ToolSchemas.CRAFT_TOOLS)));
-        if (withVision) {
-            groups.add(new EntityToolsProvider(GroupNames.VISION, "vision",
-                    "视觉：射线扫描 / 申请截图 / 重看已拍图", ToolSchemas.VISION_TOOLS));
-        }
         return groups;
     }
 

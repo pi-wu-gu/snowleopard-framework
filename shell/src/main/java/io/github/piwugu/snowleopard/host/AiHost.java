@@ -79,6 +79,12 @@ public final class AiHost {
         return client != null;
     }
 
+    /** 自检用：给一句话，返回本轮的工具组顺序（验证"相关组排最前"真的生效，而不是只写在注释里）。 */
+    public static List<String> routedGroupsForTest(String userText) {
+        SnowLeopard core = SnowLeopardMod.core();
+        return core == null ? List.of() : routeOrder(core, userText);
+    }
+
     /**
      * 视觉工具组要不要注册（装配期调用，早于 {@link #init}）。
      *
@@ -325,8 +331,13 @@ public final class AiHost {
                     model, prevLevel, cap.level());
         }
 
+        // **工具分组要真的用上**（2026-10-27 13:55 (UTC+8)）：79 个工具平铺时，模型对清单**末尾**的
+        // 工具视而不见（实测 vision 在末位 → deepseek-flash 一次都没调；移到最前 → 稳定命中）。
+        // 所以按本轮话题把"对症的组"提到最前：不改能力、只改顺序，顺带让提示词能点名"本轮相关组"。
+        List<String> groupOrder = routeOrder(core, user.toString());
+
         List<Map<String, Object>> messages = new ArrayList<>();
-        messages.add(Map.of("role", "system", "content", systemPrompt(model)));
+        messages.add(Map.of("role", "system", "content", systemPrompt(model, groupOrder)));
         messages.addAll(store.window(model, historyWindow));
         Map<String, Object> userMsg = Map.of("role", "user", "content", user.toString());
         messages.add(userMsg);
@@ -336,7 +347,9 @@ public final class AiHost {
         injectVision(model, messages);
 
         // ② 工具循环
-        List<Map<String, Object>> tools = toolSchemas(core);
+        List<Map<String, Object>> tools = toolSchemas(core, groupOrder);
+        SnowLeopardMod.LOG.info("[雪豹框架][host] 本轮工具组顺序前四 {}（共 {} 工具）",
+                groupOrder.subList(0, Math.min(4, groupOrder.size())), tools.size());
         String finalText = "";
         for (int round = 1; round <= maxRounds; round++) {
             // 带图请求只在多模态提供商之间转移（能力守卫在 LlmClient 里，这里只负责判定）
@@ -414,6 +427,9 @@ public final class AiHost {
     /** 工具名 → (组短名, 工具)。重名工具跳过后者（清单构建时记 WARN）。 */
     private static final Map<String, Entry> TOOLS = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /** 工具名出现次数（暴露名规则的**唯一输入**，只在这里算一次）。 */
+    private static final Map<String, Integer> NAME_COUNTS = new java.util.HashMap<>();
+
     /** usage 里的调用签名前缀（如 {@code sense.status(}）——换成暴露名后模型才不会叫错。 */
     private static final java.util.regex.Pattern CALL_SIG =
             java.util.regex.Pattern.compile("^[A-Za-z_][A-Za-z0-9_.]*\\(");
@@ -423,31 +439,41 @@ public final class AiHost {
 
     private static volatile boolean toolsBuilt;
 
+    /** 组全名（{@code mod:snowleopard:vision}）→ 短名（{@code vision}）。 */
+    private static String shortGroup(String full) {
+        return full.substring(full.lastIndexOf(':') + 1);
+    }
+
+    /**
+     * 暴露名规则的**单点实现**（索引构建与清单输出必须同源，否则"清单里有、执行面不认"）。
+     *
+     * <p>两条规则：① 同名工具一律带组前缀；② **vision 组无条件带前缀**——
+     * scan/shot/show 不重名，裸暴露会得到 `shot`（听着像射击），模型联想不到"看图"。
+     */
+    private static String exposedName(String shortGroup, String toolName) {
+        boolean force = "vision".equals(shortGroup);
+        Integer c = NAME_COUNTS.get(toolName);
+        return force || (c != null && c > 1) ? shortGroup + "_" + toolName : toolName;
+    }
+
     private static void buildToolIndex(SnowLeopard core) {
         if (toolsBuilt) {
             return;
         }
         // 两遍扫描：**重名的工具一律带组前缀暴露**（status 在 sense/entity_self/view/interact 各一——
         // 旧做法"先到先得"会让 view_status/interact_status 对模型不可见，2026-10-24 用户点名修掉）
-        Map<String, Integer> counts = new java.util.HashMap<>();
+        NAME_COUNTS.clear();
         for (ToolRegistry.Group g : core.registry().groups()) {
             for (ToolRegistry.Tool t : g.tools()) {
-                counts.merge(t.name(), 1, Integer::sum);
+                NAME_COUNTS.merge(t.name(), 1, Integer::sum);
             }
         }
         for (ToolRegistry.Group g : core.registry().groups()) {
-            String shortGroup = g.full().substring(g.full().lastIndexOf(':') + 1);
+            String shortGroup = shortGroup(g.full());
             for (ToolRegistry.Tool t : g.tools()) {
                 // 前缀用下划线：OpenAI 兼容端点的 function.name 只允许 [a-zA-Z0-9_-]
                 // （点号会被 DeepSeek/MiMo 400 "does not match pattern"——2026-10-24 04:30 踩过）
-                //
-                // **vision 组强制带前缀**（2026-10-27 13:20 (UTC+8)）：scan/shot/show 三个名字
-                // 都不重名，按"重名才带前缀"会被裸暴露成 `shot`——清单里躺着一个叫 shot 的工具，
-                // 模型根本不会把它和"看图/视觉"联系起来，于是"能看图却从不调用"。
-                // 名字必须自解释，且描述里写的用法要与暴露名同形（否则模型按描述去调，永远失败）。
-                boolean force = "vision".equals(shortGroup);
-                String exposed = force || counts.getOrDefault(t.name(), 0) > 1
-                        ? shortGroup + "_" + t.name() : t.name();
+                String exposed = exposedName(shortGroup, t.name());
                 Entry prev = TOOLS.putIfAbsent(exposed, new Entry(shortGroup, t));
                 if (prev != null) {
                     SnowLeopardMod.LOG.warn("[雪豹框架][host] 暴露名仍冲突 {}（{} 与 {}），后者不进清单",
@@ -476,47 +502,113 @@ public final class AiHost {
         return e == null ? null : e.tool().name();
     }
 
-    /** OpenAI 工具清单（由注册表生成；params 的扁平"参数名→说明"形状转成 JSON Schema）。 */
-    private static List<Map<String, Object>> toolSchemas(SnowLeopard core) {
+    /**
+     * 组名 → 触发词（命中就把该组提到清单**最前**）。
+     *
+     * <p>**只排序、不裁剪**：裁掉就等于真没了（模型调不了看不见的工具），
+     * 而"把对症的组排前面"既能治"末尾被无视"，又不会让任何能力消失。
+     * 依据是 2026-10-27 的实测：同样 78 个工具，vision 在末位时 deepseek-flash 一次都没调，
+     * 移到最前后才稳定命中——**模型对长清单末尾的工具确实视而不见**。
+     */
+    private static final Map<String, String[]> GROUP_HINTS = new java.util.LinkedHashMap<>();
+
+    static {
+        GROUP_HINTS.put("vision", new String[]{"看", "颜色", "长什么样", "长啥样", "外观", "画面", "截图", "视野", "识别", "什么样"});
+        GROUP_HINTS.put("world", new String[]{"周围", "附近", "方圆", "地形", "区块", "那边", "什么方块"});
+        GROUP_HINTS.put("watch", new String[]{"谁在", "盯着", "怪物", "有怪", "动静", "实体"});
+        GROUP_HINTS.put("move", new String[]{"走", "去", "过来", "跟着", "靠近", "离开", "移动", "到这里", "跑"});
+        GROUP_HINTS.put("interact", new String[]{"挖", "破坏", "放", "打", "攻击", "用", "吃", "砍"});
+        GROUP_HINTS.put("item", new String[]{"背包", "物品", "捡", "拾取", "丢", "箱子", "容器", "东西"});
+        GROUP_HINTS.put("craft", new String[]{"合成", "做一", "配方", "材料"});
+        GROUP_HINTS.put("avatar", new String[]{"绑定", "唤醒", "载体"});
+    }
+
+    /**
+     * 本轮清单的组顺序：**vision 常驻最前**，随后是命中的组（按触发顺序），其余按注册顺序。
+     */
+    private static List<String> routeOrder(SnowLeopard core, String userText) {
+        List<String> all = new ArrayList<>();
+        for (ToolRegistry.Group g : core.registry().groups()) {
+            all.add(shortGroup(g.full()));
+        }
+        List<String> order = new ArrayList<>();
+        if (capability.canSeeImages() || capability.level() == VisionCapability.Level.L1) {
+            order.add("vision");       // 视觉常驻最前；未启用时该组根本没注册，all 里也没有
+        }
+        String text = userText == null ? "" : userText;
+        for (Map.Entry<String, String[]> e : GROUP_HINTS.entrySet()) {
+            if (order.contains(e.getKey())) {
+                continue;
+            }
+            for (String w : e.getValue()) {
+                if (text.contains(w)) {
+                    order.add(e.getKey());
+                    break;
+                }
+            }
+        }
+        for (String g : all) {
+            if (!order.contains(g)) {
+                order.add(g);
+            }
+        }
+        return order;
+    }
+
+    /** OpenAI 工具清单（按 {@code order} 的组顺序输出；params 的扁平"参数名→说明"形状转成 JSON Schema）。 */
+    private static List<Map<String, Object>> toolSchemas(SnowLeopard core, List<String> order) {
         buildToolIndex(core);
         List<Map<String, Object>> out = new ArrayList<>();
-        // **function.name 必须用暴露名（含组前缀）**——用原始注册名会让四个 status 同名，
-        // DeepSeek/MiMo 直接 400 "Tool names must be unique"（2026-10-24 04:02–04:21 踩过：
-        // 故障转移兜到 stepfun，优先级第 1 的 DeepSeek 整整一轮没真正服务过）
-        for (Map.Entry<String, Entry> ee : TOOLS.entrySet()) {
-            Entry e = ee.getValue();
-            Map<String, Object> props = new LinkedHashMap<>();
-            List<Object> required = new ArrayList<>();
-            for (Map.Entry<String, Object> pe : e.tool().params().entrySet()) {
-                if (pe.getKey().equals("type")) {
+        for (String shortG : order) {
+            for (ToolRegistry.Group g : core.registry().groups()) {
+                if (!shortGroup(g.full()).equals(shortG)) {
                     continue;
                 }
-                if (pe.getKey().equals("required") && pe.getValue() instanceof List<?> l) {
-                    required.addAll(l);
-                    continue;
+                for (ToolRegistry.Tool t : g.tools()) {
+                    String exposed = exposedName(shortG, t.name());
+                    Entry e = TOOLS.get(exposed);
+                    if (e != null) {
+                        out.add(toSchema(exposed, e));
+                    }
                 }
-                props.put(pe.getKey(), Map.of("type", "string",
-                        "description", String.valueOf(pe.getValue())));
+                break;
             }
-            Map<String, Object> parameters = new LinkedHashMap<>();
-            parameters.put("type", "object");
-            parameters.put("properties", props);
-            if (!required.isEmpty()) {
-                parameters.put("required", required);
-            }
-            // **描述里的调用签名必须与暴露名同形**（否则模型按 "sense.status()" 学到名字，
-            // 调出来的却是 sense_status / status 两种之一，两边都对不上——2026-10-24 05:20 (UTC+8)）：
-            // usage 是给人看的 DSML（sense.status()），暴露名是给 API 的键（sense_status），
-            // 这里把签名前缀统一换成暴露名，**转换只此一处**，执行面仍只认注册真名。
-            String usage = e.tool().usage() == null ? "" : CALL_SIG.matcher(e.tool().usage())
-                    .replaceFirst(ee.getKey() + "(");
-            out.add(Map.of("type", "function", "function", Map.of(
-                    "name", ee.getKey(),
-                    "description", e.tool().summary() == null ? usage
-                            : e.tool().summary() + "（" + usage + "）",
-                    "parameters", parameters)));
         }
         return out;
+    }
+
+    /** 单个工具 → OpenAI function schema（**name 一律用暴露名**）。 */
+    private static Map<String, Object> toSchema(String exposed, Entry e) {
+        Map<String, Object> props = new LinkedHashMap<>();
+        List<Object> required = new ArrayList<>();
+        for (Map.Entry<String, Object> pe : e.tool().params().entrySet()) {
+            if (pe.getKey().equals("type")) {
+                continue;
+            }
+            if (pe.getKey().equals("required") && pe.getValue() instanceof List<?> l) {
+                required.addAll(l);
+                continue;
+            }
+            props.put(pe.getKey(), Map.of("type", "string",
+                    "description", String.valueOf(pe.getValue())));
+        }
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("type", "object");
+        parameters.put("properties", props);
+        if (!required.isEmpty()) {
+            parameters.put("required", required);
+        }
+        // **描述里的调用签名必须与暴露名同形**（否则模型按 "sense.status()" 学到名字，
+        // 调出来的却是 sense_status / status 两种之一，两边都对不上——2026-10-24 05:20 (UTC+8)）：
+        // usage 是给人看的 DSML（sense.status()），暴露名是给 API 的键（sense_status），
+        // 这里把签名前缀统一换成暴露名，**转换只此一处**，执行面仍只认注册真名。
+        String usage = e.tool().usage() == null ? "" : CALL_SIG.matcher(e.tool().usage())
+                .replaceFirst(exposed + "(");
+        return Map.of("type", "function", "function", Map.of(
+                "name", exposed,
+                "description", e.tool().summary() == null ? usage
+                        : e.tool().summary() + "（" + usage + "）",
+                "parameters", parameters));
     }
 
     private static Result dispatchOnServer(String model, String group, String tool,
@@ -553,7 +645,7 @@ public final class AiHost {
 
     // ------------------------------------------------------------- 上下文
 
-    private static String systemPrompt(String model) {
+    private static String systemPrompt(String model, List<String> groupOrder) {
         StringBuilder b = new StringBuilder();
         b.append("你是运行在 Minecraft 服务器里的自主模型。你的模型编号是 ").append(model);
         String name = ChatRuntime.displayName(model);
@@ -582,6 +674,14 @@ public final class AiHost {
         // 视觉能力（L0–L3 单点计算的唯一来源）——**会话开头就定调**，
         // 免得模型先入为主地以为"我能看到"（假成功家族）
         b.append(capability.promptLine());
+        // **让"分组"对模型可见**（2026-10-27 13:55 (UTC+8)）：工具不是一堆无序函数，而是按组组织的；
+        // 提示词点名本轮排在最前的几组，模型才知道"这个能力属于哪一组、去哪找"。
+        // 只列前 4 组（短句），多了反而变成噪音。
+        if (groupOrder != null && !groupOrder.isEmpty()) {
+            b.append("- 工具按组组织，本轮与当前话题最相关的组排在最前：")
+                    .append(String.join(" / ", groupOrder.subList(0, Math.min(4, groupOrder.size()))))
+                    .append("（其余组仍在清单里，需要时直接用）。\n");
+        }
         return b.toString();
     }
 
