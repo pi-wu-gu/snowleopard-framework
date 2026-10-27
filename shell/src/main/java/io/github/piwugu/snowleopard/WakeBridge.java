@@ -97,17 +97,27 @@ public final class WakeBridge {
         return result;
     }
 
-    /** Vitals 注入段（P2，分析 v3 §3.3）：血/经验/饥饿一行。无载体返回 null。 */
+    /**
+     * Vitals 注入段（P2，分析 v3 §3.3）：血/经验/饥饿一行。无载体返回 null。
+     *
+     * <p>饥饿低于一半时**直接点名入口**（2026-10-28 05:35 (UTC+8)）：真机上模型看到"饥饿 12/20"后
+     * 翻遍工具只找到 interact 组的 `use`，于是回复"我这边的动作接口只有 use，没有进食或使用物品的入口"。
+     * 状态行只报数字、不给入口，等于让人知道饿了却没告诉他厨房在哪。这里只说**用哪个工具**，
+     * 不替他决定"现在该吃"——工作集仍归模型自己管。
+     */
     private static String vitalsSegment(String modelId) {
         try {
             var avatar = io.github.piwugu.snowleopard.AvatarWake.primaryAvatarForInjection(modelId);
             if (avatar == null) {
                 return null;
             }
-            return String.format("血 %d/%d · 经验 %d/%d · 饥饿 %d/20",
+            int hunger = avatar.getVitalsHunger();
+            String line = String.format("血 %d/%d · 经验 %d/%d · 饥饿 %d/20",
                     (int) avatar.getHealth(), (int) avatar.getMaxHealth(),
-                    avatar.getVitalsXp(), avatar.getVitalsXpMax(),
-                    avatar.getVitalsHunger());
+                    avatar.getVitalsXp(), avatar.getVitalsXpMax(), hunger);
+            return hunger <= 10
+                    ? line + "（饿了：avatar_eat 从背包取食物吃；背包没食物就跟玩家要）"
+                    : line;
         } catch (Exception e) {
             return null;
         }

@@ -764,11 +764,29 @@ final class ClientSmokeTest {
                     "loot table 在 data/snowleopard/loot_table/blocks/shackled_core.json（resources 打包）");
 
             // P1-5: 家目录管理
+            // **先清再建**（2026-10-28 05:20 真机：`p6-test-home exists=true` → 这条断言永远 FAIL，
+            // 而 FAIL 的原因是上一轮的自己，不是产品）。残留目录会让人再也不信这条断言，
+            // 比断言缺失更糟——按"清家必须清后重建"铁律处理。
             String testHome = "p6-test-home";
+            java.nio.file.Path oldHome = io.github.piwugu.snowleopard.home.CoreHomes.idsRoot()
+                    .resolve(testHome);
+            if (java.nio.file.Files.exists(oldHome)) {
+                try (var walk = java.nio.file.Files.walk(oldHome)) {
+                    walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                        try {
+                            java.nio.file.Files.deleteIfExists(p);
+                        } catch (java.io.IOException ignored) {
+                            // 删不掉就让下面的断言如实失败，别静默
+                        }
+                    });
+                } catch (java.io.IOException ignored) {
+                }
+            }
             boolean homeCreated = io.github.piwugu.snowleopard.home.CoreHomes.createHome(testHome);
             ok("P1 创建家（空家）", homeCreated && io.github.piwugu.snowleopard.home.CoreHomes.homeExists(testHome)
                     && !io.github.piwugu.snowleopard.home.CoreHomes.isBound(testHome),
-                    testHome + " exists=" + io.github.piwugu.snowleopard.home.CoreHomes.homeExists(testHome));
+                    "created=" + homeCreated + " exists="
+                            + io.github.piwugu.snowleopard.home.CoreHomes.homeExists(testHome));
 
             // P1-6: ID 校验
             ok("P1 ID 规则拒绝非法名",
@@ -793,10 +811,24 @@ final class ClientSmokeTest {
                     "healed=" + healed + " xpAfter=" + avatar.getVitalsXp());
 
             // P2-9: eatFood
+            // **先造场景**（2026-10-28 05:20 真机：`recovered=0 hunger=20`）——饥饿满 20 时
+            // "吃不下"是**正确行为**，断言却按"必须回 6"判，于是正确实现被记成 FAIL；
+            // 反过来若实现真的坏了（比如永远返回 6），满饥饿这条也照样绿。两头都不可信，必须先把饥饿降下来。
+            avatar.setVitalsHunger(10);
             int hungerBefore = avatar.getVitalsHunger();
             int recovered = avatar.eatFood(6);
-            ok("P2 进食回饥饿", recovered == 6 && avatar.getVitalsHunger() == hungerBefore + 6,
-                    "recovered=" + recovered + " hunger=" + avatar.getVitalsHunger());
+            ok("P2 进食回饥饿", recovered == 6 && avatar.getVitalsHunger() == Math.min(20, hungerBefore + 6),
+                    "recovered=" + recovered + " hunger=" + hungerBefore + "→" + avatar.getVitalsHunger());
+
+            // P2-9b: 饥饿低时状态行必须**点名进食入口**（2026-10-28 用户反馈"模型说自己不能主动进食"）。
+            // 真机上模型看到"饥饿 12/20"后翻遍工具只找到 interact 的 use，回了一句"没有进食的入口"——
+            // 数字报了、厨房没指，等于白报。这条断言锁的是"状态行里出现 avatar_eat"。
+            avatar.setVitalsHunger(9);
+            String hungryLine = io.github.piwugu.snowleopard.WakeBridge.turnLine(model);
+            ok("饥饿低时状态行点名进食入口（avatar_eat）",
+                    hungryLine != null && hungryLine.contains("avatar_eat"),
+                    String.valueOf(hungryLine));
+            avatar.setVitalsHunger(16);   // 还原，别把后面断言的前提改掉
 
             // P2-10: avatar_vitals 工具
             var vit = EntityToolsRuntime.dispatch(model, "avatar", "avatar_vitals", Map.of());
