@@ -138,7 +138,11 @@ public final class AiHost {
                         cfg.vision()::maxCaptures, cfg.vision()::keepImages);
                 SnowLeopardMod.LOG.warn("[雪豹框架][host] 视觉后端=测试桩（画面是假的，仅验收用）");
             } else if ("client".equals(cfg.vision().backend())) {
-                SnowLeopardMod.LOG.warn("[雪豹框架][host] vision.backend=client 尚未接入（P4）——按不可用处理");
+                visionBackend = new ClientVisionBackend(
+                        m -> core == null ? null : core.ids().home(m).resolve("vision"),
+                        cfg.vision()::maxCaptures, cfg.vision()::keepImages);
+                SnowLeopardMod.LOG.info("[雪豹框架][host] 视觉后端=客户端离屏渲染"
+                        + "（需同维度玩家在载体 {} 格内）", (int) ClientVisionBackend.MAX_RENDER_DIST);
             }
             // 能力级必须在后端定下之后再算（否则 L0/L2 会算错——"该 L1 报成 L0"比没能力更坏）
             capability = computeCapability(cfg);
@@ -208,6 +212,11 @@ public final class AiHost {
     public static void onServerTick(ServerTickEvent.Post event) {
         if (client == null || event.getServer().getTickCount() % 20 != 0) {
             return;
+        }
+        // 截图超时清扫：图永远不回来也要让模型知道失败，不能一直"稍等"
+        int swept = VisionPending.sweep(visionCfg.timeoutMs());
+        if (swept > 0) {
+            SnowLeopardMod.LOG.warn("[雪豹框架][视觉] {} 张截图渲染超时（{}ms）", swept, visionCfg.timeoutMs());
         }
         if (!inFlight.compareAndSet(false, true)) {
             return;   // 上一批还没跑完：下个 poll 再说（FIFO 不丢）

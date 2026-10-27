@@ -22,7 +22,7 @@ public interface VisionBackend {
      * @param x,y,z   载体眼位（服务端权威坐标；实现方不要自己去猜）
      * @param yaw,pitch 视线朝向（度；**服务端下发的值**，不信任客户端同步值）
      */
-    record Shot(String modelId, int width, int height,
+    record Shot(String modelId, int entityId, String dimension, int width, int height,
                 double x, double y, double z, float yaw, float pitch) {
     }
 

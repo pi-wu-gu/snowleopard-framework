@@ -485,8 +485,10 @@ public final class EntityToolsModule {
         }
         try {
             net.minecraft.world.phys.Vec3 eye = self.getEyePosition(1.0f);
+            String dim = self.level() instanceof ServerLevel sl
+                    ? sl.dimension().location().toString() : "";
             String reqId = backend.request(new io.github.piwugu.snowleopard.tools.VisionBackend.Shot(
-                    modelId, ctx.visionWidth(), ctx.visionHeight(),
+                    modelId, self.getId(), dim, ctx.visionWidth(), ctx.visionHeight(),
                     eye.x, eye.y, eye.z, self.getYRot(), self.getXRot()));
             Map<String, Object> d = new java.util.LinkedHashMap<>();
             d.put("reqId", reqId);

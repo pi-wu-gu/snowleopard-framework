@@ -471,27 +471,39 @@ final class ClientSmokeTest {
         ok("连发第二枪被拦（不排队——排队=把失败变成稍后执行）",
                 capAgain instanceof snowleopard.core.result.Result.Warn, brief(capAgain));
 
-        try {
-            Thread.sleep(500);      // 测试桩模拟渲染 150ms；这里给足余量
-        } catch (InterruptedException ignored) {
-            Thread.currentThread().interrupt();
-        }
-        java.nio.file.Path shot = null;
-        for (var r : io.github.piwugu.snowleopard.host.VisionPending.drain(model)) {
-            if (r.state() == io.github.piwugu.snowleopard.host.VisionPending.State.READY) {
-                shot = r.file() == null ? null : java.nio.file.Path.of(r.file());
+        // 等图**不能在服务端主线程 sleep**：回执的落地工作本身要 `server.execute` 排到主线程，
+        // 主线程一睡就等于"等自己"——v1.12.7 真机实测：轮询放弃后 100ms 图才落地（假失败）。
+        // 所以放到旁路线程轮询（同 ⑨ 破坏掉落的写法），最多 ~10s，拿到就判。
+        final String shotModel = model;
+        Thread visionWait = new Thread(() -> {
+            java.nio.file.Path got = null;
+            for (int i = 0; i < 100 && got == null; i++) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                for (var r : io.github.piwugu.snowleopard.host.VisionPending.drain(shotModel)) {
+                    if (r.state() == io.github.piwugu.snowleopard.host.VisionPending.State.READY) {
+                        got = r.file() == null ? null : java.nio.file.Path.of(r.file());
+                    }
+                }
             }
-        }
-        boolean pngOk = false;
-        if (shot != null && java.nio.file.Files.isRegularFile(shot)) {
-            try {
-                byte[] b = java.nio.file.Files.readAllBytes(shot);
-                pngOk = b.length > 8 && (b[0] & 0xFF) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G';
-            } catch (java.io.IOException e) {
-                pngOk = false;
+            boolean okPng = false;
+            if (got != null && java.nio.file.Files.isRegularFile(got)) {
+                try {
+                    byte[] b = java.nio.file.Files.readAllBytes(got);
+                    okPng = b.length > 8 && (b[0] & 0xFF) == 0x89
+                            && b[1] == 'P' && b[2] == 'N' && b[3] == 'G';
+                } catch (java.io.IOException ignored) {
+                    okPng = false;
+                }
             }
-        }
-        ok("截图回执落盘（PNG 真存在且签名正确）", pngOk, "file=" + shot);
+            ok("截图回执落盘（PNG 真存在且签名正确）", okPng, "file=" + got);
+        }, "snowleopard-vision-wait");
+        visionWait.setDaemon(true);
+        visionWait.start();
 
         var showRes = EntityToolsRuntime.dispatch(model, "vision", "show", Map.of());
         boolean replay = false;

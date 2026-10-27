@@ -83,6 +83,31 @@ public final class VisionPending {
         return reqId;
     }
 
+    /** reqId → 模型（回执只带 reqId；查不到 = 过期回执，调用方直接丢弃）。 */
+    public static synchronized String modelOf(String reqId) {
+        Rec r = ALL.get(reqId);
+        return r == null ? null : r.modelId();
+    }
+
+    /**
+     * 超时清扫：{@code REQUESTED} 超过 {@code timeoutMs} 仍未回执 → 标 {@code FAILED}。
+     * 图永远不回来时也要**让模型知道失败了**，不能一直"稍等"。
+     */
+    public static synchronized int sweep(long timeoutMs) {
+        long now = System.currentTimeMillis();
+        int n = 0;
+        for (Map.Entry<String, Rec> e : new ArrayList<>(ALL.entrySet())) {
+            Rec r = e.getValue();
+            if (r.state() == State.REQUESTED && now - r.bornMs() > timeoutMs) {
+                ALL.put(e.getKey(), new Rec(r.reqId(), r.modelId(), State.FAILED, null,
+                        "渲染超时（" + timeoutMs + "ms 内客户端未回执）", r.source(),
+                        r.width(), r.height(), r.bornMs()));
+                n++;
+            }
+        }
+        return n;
+    }
+
     public static synchronized void ready(String reqId, String file) {
         Rec r = ALL.get(reqId);
         if (r != null) {

@@ -94,6 +94,10 @@ public final class SnowLeopardMod {
             AvatarEntities.register(container.getEventBus());
             // 蝙蝠物品（v1.10.0）：capture 入包/放走/吃掉——注册住 entitytools（工具层），渲染在客户端
             io.github.piwugu.snowleopard.item.BatItems.register(container.getEventBus());
+            // 视觉网络包（v1.12.7）：请求（服务端→客户端）/ 回执（客户端→服务端）。
+            // 两侧都要注册，否则通道对不上；客户端侧的具体实现在 dist 判断之后再解析
+            container.getEventBus().addListener(
+                    io.github.piwugu.snowleopard.client.vision.VisionPayloads::register);
             AvatarWake.init(gameDir, core);
             // AI 执行端（host 层）：轮询 + 会话 + 工具循环——只在客户端验收模式启用
             // （全量自测要自己数 pending，host 抢跑会造成假失败）
