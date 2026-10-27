@@ -373,13 +373,15 @@ public final class EntityToolsModule {
         if (self == null) {
             return Result.error("感官未开启或未绑定——控制类工具禁用（当前: " + sense.state() + "）");
         }
-        Object y = params.get("yaw");
-        Object p = params.get("pitch");
-        if (!(y instanceof Number yn) || !(p instanceof Number pn)) {
+        // **宽容解析**（2026-10-27 真机实锤）：schema 里参数一律是 string，模型会发 "20"，
+        // 严格 instanceof Number 会直接拒 → 模型白耗一轮改成数字再发一次。
+        Double yawNum = num(params, "yaw");
+        Double pitchNum = num(params, "pitch");
+        if (yawNum == null || pitchNum == null) {
             return Result.error("look 需要数值参数 yaw 与 pitch（度）");
         }
-        double yaw = yn.doubleValue();
-        double pitch = pn.doubleValue();
+        double yaw = yawNum;
+        double pitch = pitchNum;
         explicitYaw = yaw;
         explicitPitch = pitch;
         explicitAge = 0;
@@ -407,7 +409,9 @@ public final class EntityToolsModule {
         if (target == null || target.isBlank() || "null".equals(target)) {
             return Result.error("look_at 需要 target");
         }
-        int duration = params.get("duration_ticks") instanceof Number n ? n.intValue() : 0;
+        // 同上：模型常把数字写成字符串
+        Double durNum = num(params, "duration_ticks");
+        int duration = durNum == null ? 0 : durNum.intValue();
         LookLockMachine.Kind kind;
         if ("block".equals(type)) {
             kind = LookLockMachine.Kind.BLOCK;
@@ -697,6 +701,28 @@ public final class EntityToolsModule {
         }
         double[] dir = moveM.direction();
         return Math.toDegrees(Math.atan2(-dir[0], dir[1]));
+    }
+
+    /**
+     * 宽容解析数值参数（{@code "20"} / {@code 20} 都收）。
+     *
+     * <p>为什么需要：函数 schema 的参数一律按 {@code type:string} 下发（见 AiHost.toSchema），
+     * 模型据此发字符串数字；严格的 {@code instanceof Number} 会把它当参数错误拒掉，
+     * 而模型通常能自己改对重发——白白多一轮，长会话里很贵。
+     */
+    private static Double num(Map<String, Object> params, String key) {
+        Object o = params == null ? null : params.get(key);
+        if (o instanceof Number n) {
+            return n.doubleValue();
+        }
+        if (o == null) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(String.valueOf(o).trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private LivingEntity requireBound() {

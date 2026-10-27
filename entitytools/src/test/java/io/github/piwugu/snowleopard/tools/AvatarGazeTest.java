@@ -62,14 +62,18 @@ class AvatarGazeTest {
     }
 
     @Test
-    void headCatchesUpThenPupilRecenters() {
+    void headStopsShortAndPupilHoldsOffset() {
+        // 新契约（2026-10-27 18:58 真机反馈后定）：头只追到"差 EYE_ONLY_LIMIT"，剩下的给眼睛。
+        // 原来头追满、瞳孔回中 → 玩家只看到头转（"只看到转头、看不到瞳孔"）。
         AvatarGaze g = new AvatarGaze();
         AvatarGaze.Pose p = null;
         for (int i = 0; i < 20; i++) {
             p = g.tick(AvatarGaze.Source.LOCK, 40, 0, 0, 0, false, 0);
         }
-        assertEquals(40.0, p.headYawRel(), 0.5, "头最终要到目标");
-        assertEquals(0.0, p.pupilX(), 0.01, "头到位后瞳孔必须回中（否则是斜眼）");
+        assertEquals(40.0 - AvatarGaze.EYE_ONLY_LIMIT, p.headYawRel(), 0.8,
+                "头应停在差 15° 处，实际 " + p.headYawRel());
+        assertEquals(AvatarGaze.PUPIL_MAX_PX, p.pupilX(), 0.01,
+                "稳态瞳孔必须偏到满格（否则肉眼看不见）");
         assertEquals(0.0, p.bodyYaw(), EPS, "40° 在头限位内，身体不该动");
     }
 
@@ -81,17 +85,21 @@ class AvatarGazeTest {
             p = g.tick(AvatarGaze.Source.LOCK, 120, 0, 0, 0, false, 0);
         }
         assertEquals(0.0, p.bodyYaw(), EPS, "头还没到 65°，身体一动都不该动");
-        assertEquals(24.0, p.headYawRel(), 0.5, "第 3 tick 头应到 24°（8°/tick）");
+        // 有死区时头起步更慢：第 1 tick 视线才 12°（< 15）头完全不动，之后才 8°/tick
+        assertTrue(p.headYawRel() < 24, "头应被死区压住、比视线慢，实际 " + p.headYawRel());
 
         for (int i = 0; i < 40; i++) {
             p = g.tick(AvatarGaze.Source.LOCK, 120, 0, p.bodyYaw(), 0, false, 0);
         }
         // 身体不需要转到"对准目标"：转到"头相对差刚好 65°"就够（65+55=120 才是视线终点）。
         // 若身体一路转到 120，头会白白回中，看起来像"整个身子拧过去看"——不是要的效果。
-        assertTrue(p.bodyYaw() >= 50, "头到限位后身体必须跟上，实际 " + p.bodyYaw());
+        assertTrue(p.bodyYaw() >= 30, "头到限位后身体必须跟上，实际 " + p.bodyYaw());
         assertTrue(p.headYawRel() <= AvatarGaze.HEAD_YAW_LIMIT + EPS, "头相对角不越限位");
-        assertEquals(120.0, p.bodyYaw() + p.headYawRel(), 2.0,
-                "身体+头 的合成视线必须落到目标 120°，实际 " + (p.bodyYaw() + p.headYawRel()));
+        // 视线 = 身体 + 头 + 瞳（瞳只剩最后 15°，对应满格像素）
+        double eyeDeg = p.pupilX() / AvatarGaze.PUPIL_MAX_PX * AvatarGaze.EYE_ONLY_LIMIT;
+        assertEquals(120.0, p.bodyYaw() + p.headYawRel() + eyeDeg, 2.5,
+                "身体+头+眼 的合成视线必须落到目标 120°，实际 "
+                        + (p.bodyYaw() + p.headYawRel() + eyeDeg));
     }
 
     @Test
@@ -130,7 +138,9 @@ class AvatarGazeTest {
             body = p.bodyYaw();
         }
         assertTrue(p.bodyYaw() < -50, "移动时身体应朝行进方向（-90），实际 " + p.bodyYaw());
-        assertTrue(Math.abs(p.headYawRel()) < 10, "视线也收束到同一方向后，头不该还偏着");
+        assertTrue(Math.abs(p.headYawRel()) < 2, "移动时头必须正（不留死区，否则像边走边偷看），实际 "
+                + p.headYawRel());
+        assertTrue(Math.abs(p.pupilX()) < 0.01, "移动收束后瞳孔回中");
     }
 
     // ------------------------------------------------------------- 目标切换防抖

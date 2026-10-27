@@ -483,11 +483,14 @@ final class ClientSmokeTest {
         }
         float headSmall = avatar.headYawRel();
         float pupilEnd = Math.abs(avatar.pupilX());
-        boolean eyesFirst = pupil1 > 0.02f && head1 < 30f;
-        boolean smallSettled = Math.abs(headSmall - 40f) < 2.5f && pupilEnd < 0.01f
+        // 眼先动：第一 tick 头几乎不动（死区内），瞳孔已经明显偏了
+        boolean eyesFirst = pupil1 > 0.15f && head1 < 8f;
+        // 收敛后：头停在差 15° 处，瞳孔**保持满格偏移**（这正是"看得见瞳孔"的关键）
+        boolean smallSettled = Math.abs(headSmall - 25f) < 2.5f
+                && Math.abs(pupilEnd - 0.35f) < 0.04f
                 && io.github.piwugu.snowleopard.tools.FacingMath
                         .deltaDeg(avatar.getYRot(), gazeBase) < 2.0;
-        ok("视线渐进①眼先动②小角度只转头且瞳孔回中", eyesFirst && smallSettled,
+        ok("视线渐进①眼先动②头留 15° 死区、瞳孔保持满格", eyesFirst && smallSettled,
                 "pupil1=" + pupil1 + " head1=" + head1 + " headEnd=" + headSmall
                         + " pupilEnd=" + pupilEnd + " bodyYaw=" + avatar.getYRot()
                         + " base=" + gazeBase);
@@ -499,12 +502,16 @@ final class ClientSmokeTest {
         }
         double bodyTurned = io.github.piwugu.snowleopard.tools.FacingMath
                 .deltaDeg(avatar.getYRot(), gazeBase);
-        double composed = avatar.getYRot() + avatar.headYawRel();
+        // 视线 = 身体 + 头 + 眼（瞳孔只剩最后 15°，换算成度数）
+        double eyeDeg = Math.abs(avatar.pupilX()) / 0.35 * 15.0;
+        double composed = avatar.getYRot() + avatar.headYawRel()
+                + (avatar.headYawRel() >= 0 ? eyeDeg : -eyeDeg);
         ok("视线渐进③大角度头到限位后身体跟上（合成视线到目标）",
-                bodyTurned > 30 && Math.abs(io.github.piwugu.snowleopard.tools.FacingMath
-                        .deltaDeg(composed, gazeBase + 120)) < 4.0,
+                bodyTurned > 20 && Math.abs(io.github.piwugu.snowleopard.tools.FacingMath
+                        .deltaDeg(composed, gazeBase + 120)) < 5.0,
                 "bodyTurned=" + bodyTurned + " headRel=" + avatar.headYawRel()
-                        + " composed=" + composed + " target=" + (gazeBase + 120));
+                        + " eyeDeg=" + eyeDeg + " composed=" + composed
+                        + " target=" + (gazeBase + 120));
 
         // **恢复体位再解锁**（v1.14.0）：本段把身体真的转过了（120° 目标 → 身体跟到 60°），
         // 不还原就会改掉后面视觉断言的场景前提——红羊毛是"按当时朝向"临时摆的，

@@ -176,6 +176,11 @@ public final class AvatarWake {
                 attackerEntity instanceof ServerPlayer sp ? sp : null);
     }
 
+    /** 说话者在多少度以外才值得转头（正前方就没必要做多余动作）。 */
+    private static final double LOOK_AT_SPEAKER_MIN_DEG = 25;
+    /** 转头看说话的时长（tick）：5 秒后自动解锁，别长期锁死视线。 */
+    private static final int LOOK_AT_SPEAKER_TICKS = 100;
+
     /** 清冷却（自测/运维用）：跨测试段时冷却会把下一段的唤醒吞掉。 */
     public static void resetCooldowns() {
         LAST_WAKE.clear();
@@ -215,7 +220,41 @@ public final class AvatarWake {
         }
         LAST_COOLDOWN_NOTE.remove(avatar.getStringUUID());
         LAST_WAKE.put(avatar.getStringUUID(), now);
+        // **叫它 = 它会转头看你**（2026-10-27 19:00 用户真机反馈："玩家在身后叫它，它没转头"）。
+        // 根因不是朝向逻辑坏了，而是模型**根本不会想到调 look_at**——它只会说话或截图。
+        // 所以这条不做成"建议模型去转"，而是唤醒链路里的固有反应：有人叫我，我抬头看他。
+        lookAtSpeaker(avatar, feedbackTo, entry.modelId());
         requestWake(from, entry.modelId(), prompt, reason, name, feedbackTo);
+    }
+
+    /**
+     * 让载体转头看说话的玩家。
+     *
+     * <p>只在玩家偏离 25° 以上时才转：站在正前方时转头是多余动作，反而显得没在听你说话（人在正前方时
+     * 眼睛动一下就够）。走 {@code look_at} 产品路径，因此头先转、身体到限位才跟，与手动锁定同一条链路。
+     *
+     * <p>失败不阻断唤醒：模型可能还没 {@code pick} 实体（未绑定 → requireBound 拒），那就只丢一行日志。
+     */
+    private static void lookAtSpeaker(AvatarEntity avatar, ServerPlayer player, String modelId) {
+        if (player == null || modelId == null || modelId.isBlank()) {
+            return;
+        }
+        double dx = player.getX() - avatar.getX();
+        double dz = player.getZ() - avatar.getZ();
+        if (dx * dx + dz * dz < 1.0e-4) {
+            return;   // 站在同一个点上：算不出朝向
+        }
+        double wantYaw = Math.toDegrees(Math.atan2(-dx, dz));
+        double delta = io.github.piwugu.snowleopard.tools.FacingMath.deltaDeg(avatar.getYRot(), wantYaw);
+        if (delta < LOOK_AT_SPEAKER_MIN_DEG) {
+            return;
+        }
+        var r = EntityToolsRuntime.dispatch(modelId, "view", "look_at",
+                java.util.Map.of("target_type", "entity", "target", player.getStringUUID(),
+                        "duration_ticks", LOOK_AT_SPEAKER_TICKS));
+        SnowLeopardMod.LOG.info("[雪豹框架][唤醒] 说话者偏离 {}°，让载体转头看他（{}）",
+                Math.round(delta), r instanceof snowleopard.core.result.Result.Ok ? "已锁定"
+                        : "未生效——多半是模型还没绑定实体");
     }
 
     // ------------------------------------------------------------- ② 定时唤醒

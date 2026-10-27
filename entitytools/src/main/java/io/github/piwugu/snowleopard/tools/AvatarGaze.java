@@ -37,10 +37,15 @@ public final class AvatarGaze {
     public static final double GAZE_PITCH_SLEW = 8;
     /** 头追视线的俯仰速度。 */
     public static final double HEAD_PITCH_SLEW = 6;
-    /** 瞳孔平移上限（像素）：眼白 2px、瞳孔 1px，理论 ±0.5，用 ±0.2 留边（超 ±0.35 侧视会露缝）。 */
-    public static final double PUPIL_MAX_PX = 0.2;
-    /** 瞳孔垂直平移上限（眼睛比宽扁）。 */
-    public static final double PUPIL_MAX_PY = 0.15;
+    /**
+     * 瞳孔平移上限（像素）。眼白 2×2、瞳孔 1×1 → 圆心最大可移 0.5（刚好贴边）。
+     *
+     * <p>原值 0.2 是"留边"的保守估计，但**肉眼看不见**（只有 1/5 个像素，2026-10-27 用户真机反馈
+     * "只看到头转、看不到瞳孔"）。取 0.35 仍留 0.15 边，侧视不露缝，位移足够被看见。
+     */
+    public static final double PUPIL_MAX_PX = 0.35;
+    /** 瞳孔垂直上限（眼睛比宽扁，且上缘有眼睑）。 */
+    public static final double PUPIL_MAX_PY = 0.28;
     /** 换目标后的最小驻留（tick）——200ms，防两个目标每 tick 互相顶替造成头左右摆。 */
     public static final int SWITCH_DWELL = 10;
 
@@ -153,8 +158,32 @@ public final class AvatarGaze {
             gazeYaw = stepToward(gazeYaw, bodyYaw, GAZE_SLEW);
             gazePitch = stepToward(gazePitch, bodyPitch, GAZE_PITCH_SLEW);
         }
-        headWorldYaw = stepToward(headWorldYaw, gazeYaw, HEAD_SLEW);
-        headWorldPitch = stepToward(headWorldPitch, gazePitch, HEAD_PITCH_SLEW);
+        // **头留死区**（2026-10-27 18:58 真机反馈后改）：头只追到"还差 EYE_ONLY_LIMIT 度"就停，
+        // 剩下的由眼睛承担。
+        //
+        // 为什么：原来头一路追到完全一致，稳态残余角 = 0 → **瞳孔永远回中**，玩家只看到头在动。
+        // 留 15° 死区后，稳态瞳孔恒偏满格，"眼睛也在看"这件事才看得见；眼睛本身也正是负责
+        // 最后这十几度精细对准的部件（真实动物同构）。
+        //
+        // **只有"注视类目标"才留死区**：
+        // - IDLE 必须完全归正，否则静止时永远斜眼 15°（比"瞳孔不动"更假的假动作）；
+        // - MOVE 也不行：走路要正眼看路，头偏 15° 会像"边走边偷看"。
+        boolean holdResidual = source == Source.LOCK || source == Source.LOOK;
+        if (!holdResidual) {
+            headWorldYaw = stepToward(headWorldYaw, gazeYaw, HEAD_SLEW);
+            headWorldPitch = stepTowardPitch(headWorldPitch, gazePitch, HEAD_PITCH_SLEW);
+        } else {
+            double gazeHeadGap = wrap(gazeYaw - headWorldYaw);
+            if (Math.abs(gazeHeadGap) > EYE_ONLY_LIMIT) {
+                double headTarget = wrap(gazeYaw - Math.signum(gazeHeadGap) * EYE_ONLY_LIMIT);
+                headWorldYaw = stepToward(headWorldYaw, headTarget, HEAD_SLEW);
+            }
+            double gazePitchGap = gazePitch - headWorldPitch;
+            if (Math.abs(gazePitchGap) > EYE_ONLY_LIMIT) {
+                double headPitchTarget = gazePitch - Math.signum(gazePitchGap) * EYE_ONLY_LIMIT;
+                headWorldPitch = stepTowardPitch(headWorldPitch, headPitchTarget, HEAD_PITCH_SLEW);
+            }
+        }
 
         // ③ 身体：移动时归行进方向（视线不抢）；否则只在头到限位后才慢慢跟上
         double newBodyYaw = bodyYaw;
