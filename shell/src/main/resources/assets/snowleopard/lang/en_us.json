@@ -1,3 +1,6 @@
 {
-  "item.snowleopard.bat": "Bat"
+  "item.snowleopard.bat": "Bat",
+  "block.snowleopard.shackled_core": "Shackled Core",
+  "item.snowleopard.shackled_core.tooltip.right": "Right-click: open core screen",
+  "item.snowleopard.shackled_core.tooltip.sneak": "Sneak + right-click: place decorative block"
 }

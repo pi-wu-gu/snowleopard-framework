@@ -1,3 +1,6 @@
 {
-  "item.snowleopard.bat": "蝙蝠"
+  "item.snowleopard.bat": "蝙蝠",
+  "block.snowleopard.shackled_core": "受限核心",
+  "item.snowleopard.shackled_core.tooltip.right": "右键：打开核心界面",
+  "item.snowleopard.shackled_core.tooltip.sneak": "潜行 + 右键：放置装饰方块"
 }

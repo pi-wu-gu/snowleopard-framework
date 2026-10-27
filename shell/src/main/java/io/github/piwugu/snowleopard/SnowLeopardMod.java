@@ -97,6 +97,10 @@ public final class SnowLeopardMod {
             AvatarEntities.register(container.getEventBus());
             // 蝙蝠物品（v1.10.0）：capture 入包/放走/吃掉——注册住 entitytools（工具层），渲染在客户端
             io.github.piwugu.snowleopard.item.BatItems.register(container.getEventBus());
+            // 受限核心（P0，分析 v3 §四）：装饰方块 + 物品（BlockItem）——注册类必须住 shell（v1.10.1 教训）。
+            // 方块注册必须先于物品（CoreItem 构造期取 CoreBlocks.SHACKLED_CORE）
+            io.github.piwugu.snowleopard.block.CoreBlocks.register(container.getEventBus());
+            io.github.piwugu.snowleopard.item.CoreItems.register(container.getEventBus());
             // 视觉网络包（v1.12.7）：请求（服务端→客户端）/ 回执（客户端→服务端）。
             // 两侧都要注册，否则通道对不上；客户端侧的具体实现在 dist 判断之后再解析
             container.getEventBus().addListener(

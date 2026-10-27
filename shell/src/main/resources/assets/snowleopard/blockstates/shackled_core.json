@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "snowleopard:block/shackled_core"
+    }
+  }
+}
