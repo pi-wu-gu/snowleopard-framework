@@ -539,6 +539,37 @@ final class ClientSmokeTest {
         ok("配方检索兼容历史 keyword（模型学过的旧名仍然收）", mLegacy == mQuery,
                 "keyword matched=" + mLegacy + " · query matched=" + mQuery);
 
+        //    (k8) 受击唤醒的提示要能直接支持决策（v1.14.4）：只说"你被攻击了，来源 Dev"，
+        //        模型分不清剑砍/箭射/摔伤/岩浆，而这几种该做的反应完全不同。
+        //        这里只断言**描述文本**（不真的触发唤醒——唤醒会开一轮会话，断言不该有这种副作用）。
+        String envHit = AvatarWake.describeHit(
+                level.damageSources().magic(), null, avatar, 3.0f);
+        ok("受击提示带伤害类型（环境伤害：无来源也能说清）",
+                envHit.contains("类型 magic") && envHit.contains("无可定位来源")
+                        && envHit.contains("血量"),
+                envHit);
+        // 同格：方位角无意义，应说"贴着你"而不是胡乱指方向
+        String sameCell = AvatarWake.describeHit(
+                level.damageSources().mobAttack(avatar), avatar, avatar, 2.0f);
+        ok("受击提示：同一格时不乱报方位（说'贴着你'）",
+                sameCell.contains("类型 mob_attack") && sameCell.contains("贴着你"),
+                sameCell);
+        // 真实第三方来源：方位词 + 距离 + 血量都要出现（不移动任何实体，用它原来的位置）
+        var nearby = level.getEntitiesOfClass(net.minecraft.world.entity.LivingEntity.class,
+                avatar.getBoundingBox().inflate(16)).stream()
+                .filter(e -> e != avatar).findFirst().orElse(null);
+        if (nearby != null) {
+            String ranged = AvatarWake.describeHit(
+                    level.damageSources().mobAttack(nearby), nearby, avatar, 2.0f);
+            boolean hasSide = ranged.contains("正前方") || ranged.contains("正后方")
+                    || ranged.contains("你的右侧") || ranged.contains("你的左侧");
+            ok("受击提示带方位距离与血量（第三方来源）",
+                    hasSide && ranged.contains("格") && ranged.contains("血量"), ranged);
+        } else {
+            ok("受击提示带方位距离与血量（第三方来源）", false,
+                    "周围 16 格内找不到第二个生物，无法验证方位");
+        }
+
         //    (l) 视觉 B 档（v1.12.5）：射线必须**真的沿视线**命中，且转身 180° 后不再命中。
         //        单向断言抓不到"方向反了"（射线往反方向也照样能命中别的方块），所以必须双向。
         var eye = avatar.getEyePosition(1.0f);

@@ -170,10 +170,76 @@ public final class AvatarWake {
         String who = attackerEntity == null ? source.getMsgId()
                 : (attackerEntity instanceof ServerPlayer sp ? sp.getGameProfile().getName()
                         : attackerEntity.getType().toShortString());
+        // **受击提示必须能直接支持决策**（2026-10-27 20:20 用户要求）：只说"你被攻击了，来源 Dev"
+        // 的话，模型分不清是剑砍、箭射、摔伤还是掉进岩浆——而这三种该做的反应完全不同
+        // （回击 / 找掩体 / 找路 / 离开岩浆）。所以把类型、直接命中物、方位距离、血量一次给全。
         wakeFromPlayer("ext-player-" + safe(who), avatar, "interact:attacked",
-                "你被攻击了：来源 " + who + "（伤害约 "
-                        + String.format(Locale.ROOT, "%.1f", event.getContainer().getNewDamage()) + "）",
+                "你被攻击了：来源 " + who + describeHit(source, attackerEntity, avatar,
+                        event.getContainer().getNewDamage()),
                 attackerEntity instanceof ServerPlayer sp ? sp : null);
+    }
+
+    /**
+     * 受击详情：类型 / 直接命中物 / 武器 / 方位距离 / 血量。
+     *
+     * <p>刻意用**不用术语的短句**（"你的右侧 3.2 格"而不是"相对 yaw +87°"）：
+     * 这段文本直接进模型上下文，它要能据此决定"回击还是躲"，而不是再花一轮去查自己的朝向。
+     */
+    static String describeHit(net.minecraft.world.damagesource.DamageSource src,
+                                      Entity attacker, AvatarEntity self, float newDamage) {
+        StringBuilder b = new StringBuilder();
+        // ① 伤害类型：mob_attack / player_attack / arrow / fall / lava …（比"来源"更能决定反应）
+        String type = src.typeHolder().unwrapKey()
+                .map(k -> k.location().getPath())
+                .orElseGet(src::getMsgId);
+        b.append("，类型 ").append(type);
+        // ② 直接命中物（箭/雪球/火球）：和责任实体（射手）分开说，否则"被箭射"会写成像近战
+        Entity direct = src.getDirectEntity();
+        if (direct != null && direct != attacker) {
+            b.append("，直接命中物 ").append(entityTypeOf(direct));
+        }
+        // ③ 武器（近战时能区分"空手打"与"拿剑砍"）
+        var weapon = src.getWeaponItem();
+        if (weapon != null && !weapon.isEmpty()) {
+            b.append("，武器 ").append(net.minecraft.core.registries.BuiltInRegistries.ITEM
+                    .getKey(weapon.getItem()).getPath());
+        }
+        // ④ 方位与距离：让"转身"这件事不需要模型自己算
+        var pos = attacker != null ? attacker.position()
+                : (direct != null ? direct.position() : null);
+        if (pos != null) {
+            double dx = pos.x - self.getX();
+            double dz = pos.z - self.getZ();
+            double dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < 0.3) {
+                // 同一格里：算方位角没有意义（dx=dz≈0 时会胡乱指向某个方向），如实说"贴着"
+                b.append("，贴着你（同一格）");
+            } else {
+                b.append("，来自").append(relativeDir(self, dx, dz))
+                        .append(String.format(Locale.ROOT, " %.1f 格", dist));
+            }
+        } else {
+            b.append("，无可定位来源（环境伤害：落地/岩浆/窒息等）");
+        }
+        // ⑤ 血量：决定"还能不能继续打"的第一手依据
+        b.append(String.format(Locale.ROOT, "；伤害约 %.1f，当前血量 %.1f/%.1f",
+                newDamage, self.getHealth(), self.getMaxHealth()));
+        return b.toString();
+    }
+
+    /** 方位：以载体自身朝向为基准（正前/正后/左/右），yaw 增大 = 向右。 */
+    private static String relativeDir(net.minecraft.world.entity.LivingEntity self, double dx, double dz) {
+        double wantYaw = Math.toDegrees(Math.atan2(-dx, dz));
+        double rel = io.github.piwugu.snowleopard.tools.AvatarGaze.wrap(wantYaw - self.getYRot());
+        String side = Math.abs(rel) <= 45 ? "正前方"
+                : Math.abs(rel) >= 135 ? "正后方"
+                        : rel > 0 ? "你的右侧" : "你的左侧";
+        return side + String.format(Locale.ROOT, "（相对朝向 %+.0f°）", rel);
+    }
+
+    /** 实体类型短名（minecraft:arrow → arrow），比 toString 稳定。 */
+    private static String entityTypeOf(Entity e) {
+        return net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).getPath();
     }
 
     /** 说话者在多少度以外才值得转头（正前方就没必要做多余动作）。 */
