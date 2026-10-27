@@ -204,8 +204,8 @@ public final class AvatarGaze {
         double actualHeadPitch = newBodyPitch + headPitchRel;
         double residualYaw = wrap(gazeYaw - actualHeadYaw);
         double residualPitch = gazePitch - actualHeadPitch;
-        double pupilX = clamp(residualYaw / EYE_ONLY_LIMIT * PUPIL_MAX_PX, -PUPIL_MAX_PX, PUPIL_MAX_PX);
-        double pupilY = clamp(residualPitch / EYE_ONLY_LIMIT * PUPIL_MAX_PY, -PUPIL_MAX_PY, PUPIL_MAX_PY);
+        double pupilX = pupilX(residualYaw);   // 单点映射（含手性），不要在这里重复一遍公式
+        double pupilY = pupilY(residualPitch);
 
         return new Pose(newBodyYaw, newBodyPitch, headYawRel, headPitchRel, pupilX, pupilY, source);
     }
@@ -245,9 +245,19 @@ public final class AvatarGaze {
         return v < lo ? lo : (v > hi ? hi : v);
     }
 
-    /** 瞳孔水平平移：把"视线领先头"的角度映射成像素（夹边）。 */
+    /**
+     * 瞳孔水平平移（**模型 x 轴方向**，已含手性修正）。
+     *
+     * <p><b>为什么取负</b>：MC 模型是左手系——面朝 {@code -z}、上 {@code +y} 时，
+     * 角色**右侧是 {@code -x}**（证据：原版 {@code HumanoidModel} 的 right_arm 就在 {@code x=-5}）。
+     * 而"视线向右"= yaw 增大 = 残余角为正；若把它直接映射到 {@code +x}，瞳孔会跑到角色左边
+     * ——2026-10-27 真机肉眼验出"方向似乎反了"就是这个。
+     *
+     * <p>垂直方向**不**取反：MC 模型 y 轴向下为正，而 pitch 正 = 低头，两者天然同向。
+     */
     public static double pupilX(double residualYawDeg) {
-        return clamp(residualYawDeg / EYE_ONLY_LIMIT * PUPIL_MAX_PX, -PUPIL_MAX_PX, PUPIL_MAX_PX);
+        double px = clamp(residualYawDeg / EYE_ONLY_LIMIT * PUPIL_MAX_PX, -PUPIL_MAX_PX, PUPIL_MAX_PX);
+        return -px;
     }
 
     /** 瞳孔垂直平移。 */

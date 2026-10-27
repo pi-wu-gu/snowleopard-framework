@@ -43,10 +43,37 @@ class AvatarGazeTest {
     @Test
     void pupilIsLinearInResidualAndClamped() {
         assertEquals(0.0, AvatarGaze.pupilX(0), EPS);
-        assertEquals(AvatarGaze.PUPIL_MAX_PX, AvatarGaze.pupilX(15), EPS);
-        assertEquals(AvatarGaze.PUPIL_MAX_PX, AvatarGaze.pupilX(200), EPS, "超限必须夹住，否则出眶露缝");
-        assertEquals(-AvatarGaze.PUPIL_MAX_PX, AvatarGaze.pupilX(-200), EPS);
-        assertTrue(Math.abs(AvatarGaze.pupilX(7.5) - AvatarGaze.PUPIL_MAX_PX / 2) < EPS);
+        // **符号是手性**：视线向右（残余角正）→ 模型 -x（MC 左手系里 -x 才是角色右侧）
+        assertEquals(-AvatarGaze.PUPIL_MAX_PX, AvatarGaze.pupilX(15), EPS);
+        assertEquals(-AvatarGaze.PUPIL_MAX_PX, AvatarGaze.pupilX(200), EPS, "超限必须夹住，否则出眶露缝");
+        assertEquals(AvatarGaze.PUPIL_MAX_PX, AvatarGaze.pupilX(-200), EPS);
+        assertTrue(Math.abs(AvatarGaze.pupilX(7.5) - (-AvatarGaze.PUPIL_MAX_PX / 2)) < EPS);
+    }
+
+    @Test
+    void pupilFollowsTargetSideNotMirrored() {
+        // 回归锁：曾经瞳孔跑到反侧（用户真机肉眼验出）。目标在 +yaw（右）→ 模型 x 必须为负。
+        AvatarGaze g = new AvatarGaze();
+        AvatarGaze.Pose right = null;
+        for (int i = 0; i < 20; i++) {
+            right = g.tick(AvatarGaze.Source.LOCK, 40, 0, 0, 0, false, 0);
+        }
+        assertTrue(right.pupilX() < 0, "看向右侧时模型 x 应为负（左手系），实际 " + right.pupilX());
+
+        g.reset(0, 0);
+        AvatarGaze.Pose left = null;
+        for (int i = 0; i < 20; i++) {
+            left = g.tick(AvatarGaze.Source.LOCK, -40, 0, 0, 0, false, 0);
+        }
+        assertTrue(left.pupilX() > 0, "看向左侧时模型 x 应为正，实际 " + left.pupilX());
+
+        // 垂直不反：低头（pitch 正）→ y 增大（MC 的 y 向下为正）
+        g.reset(0, 0);
+        AvatarGaze.Pose down = null;
+        for (int i = 0; i < 20; i++) {
+            down = g.tick(AvatarGaze.Source.LOCK, 0, 40, 0, 0, false, 0);
+        }
+        assertTrue(down.pupilY() > 0, "低头时瞳孔应向下（y 增大），实际 " + down.pupilY());
     }
 
     // ------------------------------------------------------------- 三级渐进（核心观感）
@@ -56,7 +83,7 @@ class AvatarGazeTest {
         AvatarGaze g = new AvatarGaze();
         // 初始正前（身体 0），目标突然出现在右侧 40°
         AvatarGaze.Pose p = g.tick(AvatarGaze.Source.LOCK, 40, 0, 0, 0, false, 0);
-        assertTrue(p.pupilX() > 0, "第一 tick 瞳孔必须已经动了（不能等头）");
+        assertTrue(Math.abs(p.pupilX()) > 0.15, "第一 tick 瞳孔必须已经明显偏了（不能等头）");
         assertTrue(Math.abs(p.headYawRel()) < Math.abs(40), "头此刻还没到目标——否则就没有'先动'");
         assertTrue(p.pupilX() <= AvatarGaze.PUPIL_MAX_PX, "瞳孔不越界");
     }
@@ -72,8 +99,8 @@ class AvatarGazeTest {
         }
         assertEquals(40.0 - AvatarGaze.EYE_ONLY_LIMIT, p.headYawRel(), 0.8,
                 "头应停在差 15° 处，实际 " + p.headYawRel());
-        assertEquals(AvatarGaze.PUPIL_MAX_PX, p.pupilX(), 0.01,
-                "稳态瞳孔必须偏到满格（否则肉眼看不见）");
+        assertEquals(AvatarGaze.PUPIL_MAX_PX, Math.abs(p.pupilX()), 0.01,
+                "稳态瞳孔必须偏到满格（否则肉眼看不见）；符号由方向测试锁");
         assertEquals(0.0, p.bodyYaw(), EPS, "40° 在头限位内，身体不该动");
     }
 
@@ -96,7 +123,7 @@ class AvatarGazeTest {
         assertTrue(p.bodyYaw() >= 30, "头到限位后身体必须跟上，实际 " + p.bodyYaw());
         assertTrue(p.headYawRel() <= AvatarGaze.HEAD_YAW_LIMIT + EPS, "头相对角不越限位");
         // 视线 = 身体 + 头 + 瞳（瞳只剩最后 15°，对应满格像素）
-        double eyeDeg = p.pupilX() / AvatarGaze.PUPIL_MAX_PX * AvatarGaze.EYE_ONLY_LIMIT;
+        double eyeDeg = Math.abs(p.pupilX()) / AvatarGaze.PUPIL_MAX_PX * AvatarGaze.EYE_ONLY_LIMIT;
         assertEquals(120.0, p.bodyYaw() + p.headYawRel() + eyeDeg, 2.5,
                 "身体+头+眼 的合成视线必须落到目标 120°，实际 "
                         + (p.bodyYaw() + p.headYawRel() + eyeDeg));
