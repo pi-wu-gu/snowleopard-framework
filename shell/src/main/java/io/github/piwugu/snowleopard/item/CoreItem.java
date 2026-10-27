@@ -20,6 +20,11 @@ import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 
+import net.neoforged.neoforge.network.PacketDistributor;
+
+import io.github.piwugu.snowleopard.home.CoreHomes;
+import io.github.piwugu.snowleopard.network.CorePayloads;
+
 /**
  * 受限核心物品（P0，2026-10-27，分析 v3 §二）。
  *
@@ -38,14 +43,15 @@ import net.minecraft.world.level.block.Block;
  *
  * <p><b>P0 边界</b>：界面未实装，普通右键=挥手+行动栏占位（不消耗、不放置）；
  * 界面/四道校验/经验/饥饿都在 P1+，届时在两处占位点换成打开 {@code CoreScreen}。
+ *
+ * <p><b>P1 更新</b>（2026-10-28）：普通右键 → 发 {@code OpenScreen} 包打开 {@code CoreScreen}。
+ * 未绑定核心 → 家管理界面（创建/绑定）；已绑定 → 配置界面占位（P2）。
+ * 所有校验在服务端 {@code CoreActionHandler}（四道校验）。
  */
 public class CoreItem extends BlockItem {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("snowleopard/CoreItem");
 
-    /** P0 占位文案（P1 换 CoreScreen 时同步移除）。 */
-    private static final Component MSG_PLACEHOLDER =
-            Component.literal("§e[受限核心] §f界面将在 P1 开放");
     /** 潜行但未对准方块面时的引导文案。 */
     private static final Component MSG_AIM_AT_BLOCK =
             Component.literal("§e[受限核心] §f对准方块面潜行放置");
@@ -79,9 +85,9 @@ public class CoreItem extends BlockItem {
     public InteractionResult useOn(UseOnContext context) {
         Player player = context.getPlayer();
         if (player != null && !player.isShiftKeyDown()) {
-            // 普通右键=弹界面（P1）——P0 占位：挥手+行动栏，绝不放置
+            // 普通右键=弹核心界面（P1）
             if (!context.getLevel().isClientSide) {
-                player.displayClientMessage(MSG_PLACEHOLDER, true);
+                openCoreScreen(player, context.getItemInHand());
             }
             return InteractionResult.sidedSuccess(context.getLevel().isClientSide);
         }
@@ -105,9 +111,9 @@ public class CoreItem extends BlockItem {
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         if (!player.isShiftKeyDown()) {
-            // 右键空气=弹界面（P1）——P0 占位同 useOn
+            // 普通右键=弹核心界面（P1）
             if (!level.isClientSide) {
-                player.displayClientMessage(MSG_PLACEHOLDER, true);
+                openCoreScreen(player, player.getItemInHand(hand));
             }
             return InteractionResultHolder.sidedSuccess(player.getItemInHand(hand), level.isClientSide);
         }
@@ -127,6 +133,32 @@ public class CoreItem extends BlockItem {
                 .withStyle(ChatFormatting.GRAY));
         tooltip.add(Component.translatable("item.snowleopard.shackled_core.tooltip.sneak")
                 .withStyle(ChatFormatting.GRAY));
+    }
+
+    /** 打开核心界面（服务端发 OpenScreen 包，客户端打开 GUI）。 */
+    private static void openCoreScreen(Player player, ItemStack stack) {
+        String home = getHomeNbt(stack);
+        if (home.isEmpty()) {
+            // 未绑定 → 家管理界面（创建/绑定）
+            var homes = CoreHomes.listHomes();
+            if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+                PacketDistributor.sendToPlayer(sp, new CorePayloads.OpenScreen(homes, home));
+            }
+        } else {
+            // 已绑定 → 配置界面（P2 占位）
+            player.displayClientMessage(
+                    Component.literal("§e[受限核心] §f家 " + home + " 配置界面将在 P2 开放"), true);
+        }
+    }
+
+    /** 读取 home NBT（未绑定返回空串）。 */
+    private static String getHomeNbt(ItemStack stack) {
+        var tag = stack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA);
+        if (tag == null) {
+            return "";
+        }
+        var copy = tag.copyTag();
+        return copy.contains("home") ? copy.getString("home") : "";
     }
 
     /** 受限核心物品唯一 id（文档/文案引用；勿散落硬编码）。 */

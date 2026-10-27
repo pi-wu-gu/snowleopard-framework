@@ -105,6 +105,9 @@ public final class SnowLeopardMod {
             // 两侧都要注册，否则通道对不上；客户端侧的具体实现在 dist 判断之后再解析
             container.getEventBus().addListener(
                     io.github.piwugu.snowleopard.client.vision.VisionPayloads::register);
+            // 受限核心界面网络包（P1，2026-10-28）：OpenScreen / Action / Result
+            container.getEventBus().addListener(
+                    io.github.piwugu.snowleopard.network.CorePayloads::register);
             AvatarWake.init(gameDir, core);
             // AI 执行端（host 层）：轮询 + 会话 + 工具循环——只在客户端验收模式启用
             // （全量自测要自己数 pending，host 抢跑会造成假失败）
