@@ -385,8 +385,8 @@ public final class AiHost {
         int dsmlRetries = 0;
         for (int round = 1; round <= maxRounds; round++) {
             drainInterjects(model, messages);
-            refreshSessionLine(core, model, messages, baseSystem);
             beginRound(core, model);
+            refreshSessionLine(core, model, messages, baseSystem, round);
             List<Map<String, Object>> tools = toolSchemas(core, model);
             if (round == 1) {
                 SnowLeopardMod.LOG.info("[雪豹框架][host] 本轮声明 {} 个工具（工作集 {}，共 {} 组可用）",
@@ -564,11 +564,25 @@ public final class AiHost {
      * {@code SessionGate.injectionLine()} 拼进 system，轮次上限用宿主自己的 {@code maxRounds}。
      */
     private static void refreshSessionLine(SnowLeopard core, String model,
-                                           List<Map<String, Object>> messages, String baseSystem) {
+                                           List<Map<String, Object>> messages, String baseSystem,
+                                           int round) {
         SnowLeopard.CallerScope sc = BuiltinRuntime.scope(model);
-        String usage = sc == null ? "" : " · " + sc.session().injectionLine();
-        messages.set(0, Map.of("role", "system", "content",
-                baseSystem + "\n【会话进度】本次会话最多 " + maxRounds + " 轮" + usage + "\n"));
+        String line;
+        if (sc == null) {
+            line = baseSystem + "\n【会话进度】第 " + round + "/" + maxRounds + " 轮\n";
+        } else {
+            var u = sc.session().usage();
+            // **不用 injectionLine()**：core 的预算是 unlimited，它会印出"轮次 3（无上限）"，
+            // 与宿主自己的"最多 32 轮"自相矛盾。轮次上限由宿主定义，这里自己拼。
+            line = baseSystem + "\n【会话进度】第 " + round + "/" + maxRounds + " 轮"
+                    + " · 当轮消耗 " + u.roundTokens() + " tok"
+                    + " · 上句消耗 " + u.lastUtteranceTokens() + " tok"
+                    + " · 本会话累计 " + u.totalTokens() + " tok\n";
+        }
+        messages.set(0, Map.of("role", "system", "content", line));
+        if (round == 1) {
+            SnowLeopardMod.LOG.info("[雪豹框架][host] 会话进度已注入: 最多 {} 轮（token 预算 无上限）", maxRounds);
+        }
     }
 
     private static void beginRound(SnowLeopard core, String model) {

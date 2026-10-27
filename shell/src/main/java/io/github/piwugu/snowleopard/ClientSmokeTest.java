@@ -634,6 +634,17 @@ final class ClientSmokeTest {
         //    开真会话、模型自己 chat_send 向玩家问好——真机全链路的最后一块
         SnowLeopard core = SnowLeopardMod.core();
         if (core != null && io.github.piwugu.snowleopard.host.AiHost.ready()) {
+            // 先等模型空闲：唤醒闸有"目标在运行 → 拒"这条，测试自己刚起的会话没跑完就来登记，
+            // 会被判成"未登记"（2026-10-27 17:25 真机踩过）。等不到就照常请求，让断言如实报因。
+            long idleDeadline = System.currentTimeMillis() + 20_000;
+            try {
+                while (io.github.piwugu.snowleopard.host.AiHost.isRunning(model)
+                        && System.currentTimeMillis() < idleDeadline) {
+                    Thread.sleep(250);
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();   // 被中断就照常往下走，让断言如实报因
+            }
             Result wake = core.wake().request(
                     new snowleopard.core.wake.WakeStore.Chain(java.util.List.of("ext-clock")),
                     "ext-clock", model,
