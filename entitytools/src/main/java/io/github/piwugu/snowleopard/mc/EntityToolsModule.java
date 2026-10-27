@@ -710,6 +710,16 @@ public final class EntityToolsModule {
      * 模型据此发字符串数字；严格的 {@code instanceof Number} 会把它当参数错误拒掉，
      * 而模型通常能自己改对重发——白白多一轮，长会话里很贵。
      */
+    /** 可选字符串参数（null / 空白 / "null" 一律视为未给）。 */
+    private static String optStr(Map<String, Object> params, String key) {
+        Object o = params == null ? null : params.get(key);
+        if (o == null) {
+            return null;
+        }
+        String s = String.valueOf(o).trim();
+        return (s.isEmpty() || "null".equals(s)) ? null : s;
+    }
+
     private static Double num(Map<String, Object> params, String key) {
         Object o = params == null ? null : params.get(key);
         if (o instanceof Number n) {
@@ -859,6 +869,20 @@ public final class EntityToolsModule {
         ServerLevel level = ctx.level();
         if (level == null) {
             return Result.error("世界未就绪");
+        }
+        // **不许把自己埋了**（2026-10-27 19:46 真机事故：载体用石头封僵尸猪灵时把自己的格子也封了，
+        // 随后窒息死亡 → 死亡即解绑 → 模型变成空壳、载体再也回不来）。
+        // 原版玩家放不了这种位置（射线自眼出发 + 有碰撞检查），服务端 setBlock 却是裸调用，
+        // 所以这层必须我们自己挡：**承载身体的格子不能放方块**。
+        net.minecraft.world.phys.AABB cell = new net.minecraft.world.phys.AABB(pos);
+        if (cell.intersects(self.getBoundingBox())) {
+            return Result.error("这个位置会压住你自己（" + pos.toShortString()
+                    + "）——你在这一格里，先走开或换一格再放");
+        }
+        for (net.minecraft.server.level.ServerPlayer pl
+                : level.getEntitiesOfClass(net.minecraft.server.level.ServerPlayer.class, cell)) {
+            return Result.error("这个位置会压住玩家 " + pl.getGameProfile().getName()
+                    + "，已拒绝（埋人不可逆）");
         }
         faceToward(self, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
         boolean ok = level.setBlockAndUpdate(pos, block.defaultBlockState());
@@ -1580,8 +1604,15 @@ public final class EntityToolsModule {
         if (level == null) {
             return Result.error("无关卡上下文");
         }
+        // **参数名必须与 schema 同形**（2026-10-27 载体在聊天里报的 bug：schema 写 keyword、
+        // 实现读 query → 传了关键字仍返回全量 890 条，且不报错）。现在统一叫 query，
+        // 同时兼容 keyword：模型在历史里学过旧名，改一次 schema 不等于它会立刻改口。
         String kw = optQuery(params);
-        int limit = params.get("limit") instanceof Number n && n.intValue() > 0 ? n.intValue() : 20;
+        if (kw == null) {
+            kw = optStr(params, "keyword");   // 仅兼容历史用法
+        }
+        Double limitNum = num(params, "limit");
+        int limit = limitNum != null && limitNum.intValue() > 0 ? limitNum.intValue() : 20;
         var access = level.registryAccess();
         var all = level.getServer().getRecipeManager()
                 .getAllRecipesFor(net.minecraft.world.item.crafting.RecipeType.CRAFTING);

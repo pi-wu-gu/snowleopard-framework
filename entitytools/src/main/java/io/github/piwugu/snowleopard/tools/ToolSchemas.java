@@ -343,9 +343,9 @@ public final class ToolSchemas {
     /** craft 组清单（2 工具）。 */
     public static final java.util.List<ToolRegistry.Tool> CRAFT_TOOLS = java.util.List.of(
             new ToolRegistry.Tool(CRAFT_RECIPES, "列可用工作台配方（id/输出/材料清单）",
-                    "craft.recipes(keyword?, limit?) → {matched, truncated, recipes:[{id, output, outputCount, ingredients}]}",
+                    "craft.recipes(query?, limit?) → {matched, truncated, recipes:[{id, output, outputCount, ingredients}]}",
                     Map.of("type", "object",
-                            "keyword", "按配方 id 或输出名过滤（如 planks / door）",
+                            "query", "按配方 id 或产物显示名过滤（如 planks / door）；缺省=全部",
                             "limit", "返回上限（缺省 20）")),
             new ToolRegistry.Tool(CRAFT, "按配方从随身背包扣料合成，产物（含桶/碗退回）回背包",
                     "craft(recipe_id, count?) → {crafted, output, toPack}；count 1..8；材料不足 → Error 列缺口；背包放不下 → Error 不扣料",

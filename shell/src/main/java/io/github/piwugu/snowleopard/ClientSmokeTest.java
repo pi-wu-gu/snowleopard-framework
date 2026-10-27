@@ -521,6 +521,24 @@ final class ClientSmokeTest {
         avatar.setYHeadRot(gazeBase);
         EntityToolsRuntime.dispatch(model, "view", "unlock", Map.of());
 
+        //    (k7) 配方检索的过滤参数真的生效（2026-10-27 载体在游戏聊天里报的 bug：
+        //        传 oak_planks 仍返回 890 条全量）。根因是 schema 声明 `keyword`、
+        //        实现却读 `query`——**名字不同形，不报错，只是静默返回全量**。
+        //        这类 bug 单测抓不到（没有 MC 配方表），只能靠真机断言锁。
+        var recAll = EntityToolsRuntime.dispatch(model, "craft", "craft_recipes", Map.of("limit", 300));
+        var recQuery = EntityToolsRuntime.dispatch(model, "craft", "craft_recipes",
+                Map.of("query", "planks", "limit", 300));
+        var recLegacy = EntityToolsRuntime.dispatch(model, "craft", "craft_recipes",
+                Map.of("keyword", "planks", "limit", 300));
+        int mAll = matchedOf(recAll);
+        int mQuery = matchedOf(recQuery);
+        int mLegacy = matchedOf(recLegacy);
+        boolean filterWorks = mAll > 0 && mQuery > 0 && mQuery < mAll;
+        ok("配方检索过滤生效（query 只返匹配项，不再全量）", filterWorks,
+                "全量 matched=" + mAll + " · query=planks matched=" + mQuery);
+        ok("配方检索兼容历史 keyword（模型学过的旧名仍然收）", mLegacy == mQuery,
+                "keyword matched=" + mLegacy + " · query matched=" + mQuery);
+
         //    (l) 视觉 B 档（v1.12.5）：射线必须**真的沿视线**命中，且转身 180° 后不再命中。
         //        单向断言抓不到"方向反了"（射线往反方向也照样能命中别的方块），所以必须双向。
         var eye = avatar.getEyePosition(1.0f);
@@ -729,6 +747,13 @@ final class ClientSmokeTest {
             case Result.Severe s -> s.data();
             case Result.Error e -> e.desc();
         };
+    }
+
+    /** 从工具结果里取 {@code matched=N}（配方检索断言用；取不到给 -1，让断言如实失败）。 */
+    private static int matchedOf(snowleopard.core.result.Result r) {
+        String s = String.valueOf(r instanceof snowleopard.core.result.Result.Ok o ? o.data() : r);
+        var m = java.util.regex.Pattern.compile("matched=(\\d+)").matcher(s);
+        return m.find() ? Integer.parseInt(m.group(1)) : -1;
     }
 
     private static String brief(Result r) {

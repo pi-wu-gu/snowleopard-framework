@@ -134,6 +134,13 @@ public final class AvatarStore {
         }
     }
 
+    /** 全部登记项（运维查看用：载体死亡解绑后要靠命令重生，得先能看见"现在有哪些"）。 */
+    public List<Entry> all() {
+        synchronized (lock) {
+            return List.copyOf(entries);
+        }
+    }
+
     public List<Entry> byModel(String modelId) {
         synchronized (lock) {
             return entries.stream().filter(e -> e.modelId().equals(modelId)).toList();
