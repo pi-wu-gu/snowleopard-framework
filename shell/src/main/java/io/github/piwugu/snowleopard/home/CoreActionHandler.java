@@ -55,6 +55,8 @@ public final class CoreActionHandler {
             handleBind(player, homeId, stack);
         } else if ("TELEPORT".equals(action)) {
             handleTeleport(player, homeId);
+        } else if ("UNBIND".equals(action)) {
+            handleUnbind(player, homeId, stack);
         } else {
             sendResult(player, false, "未知操作：" + action);
         }
@@ -158,6 +160,25 @@ public final class CoreActionHandler {
         sendResult(player, true, String.format(
                 "%s 已叫到身边（距离 %.1f 格，扣 %d 经验，剩余 %d）",
                 homeId, dist, cost, avatar.getVitalsXp()));
+    }
+
+    /** 解绑：删除 core_binding.json，消耗绑定核心还你一枚未绑定核心。 */
+    private static void handleUnbind(Player player, String homeId, ItemStack stack) {
+        if (!CoreHomes.isBound(homeId)) {
+            sendResult(player, false, "家 " + homeId + " 未绑定");
+            return;
+        }
+        if (!CoreHomes.unbindCore(homeId)) {
+            sendResult(player, false, "解绑失败（磁盘错误）");
+            return;
+        }
+        // 消耗绑定核心 → 还一枚未绑定核心
+        stack.shrink(1);
+        ItemStack fresh = new ItemStack(CoreItems.SHACKLED_CORE.get());
+        if (!player.getInventory().add(fresh)) {
+            player.drop(fresh, false);
+        }
+        sendResult(player, true, "已解除 " + homeId + " 的绑定（还你 1 枚未绑定核心）");
     }
 
     // ---------- NBT 读写（home 字段） ----------

@@ -98,6 +98,22 @@ public final class CoreHomes {
     }
 
     /**
+     * 解绑核心（删 {@code core_binding.json}）。丢失钥匙的恢复路径。
+     *
+     * @return true=解绑成功
+     */
+    public static boolean unbindCore(String id) {
+        if (!homeExists(id)) {
+            return false;
+        }
+        try {
+            return Files.deleteIfExists(idsRoot().resolve(id).resolve("core_binding.json"));
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
      * 绑定核心到家（写 {@code core_binding.json}）。一核心一家：已绑定则拒绝。
      *
      * @return true=绑定成功；false=家不存在 / 已绑定 / 写入失败

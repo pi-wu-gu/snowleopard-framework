@@ -85,13 +85,20 @@ public class CoreScreen extends Screen {
                 .build());
     }
 
-    /** 已绑定：配置 + 传送。 */
+    /** 已绑定：配置 + 传送 + 解绑。 */
     private void initBound(int cx) {
         int y = 70;
         // 传送按钮（P5）
         this.addRenderableWidget(Button.builder(
                         Component.literal("§6传送载体到身边"),
                         b -> sendAction("TELEPORT", homeId))
+                .bounds(cx - 60, y, 120, 24)
+                .build());
+        y += 32;
+        // 解绑按钮（丢失钥匙恢复路径）
+        this.addRenderableWidget(Button.builder(
+                        Component.literal("§c解绑（归还未绑定核心）"),
+                        b -> sendAction("UNBIND", homeId))
                 .bounds(cx - 60, y, 120, 24)
                 .build());
     }
