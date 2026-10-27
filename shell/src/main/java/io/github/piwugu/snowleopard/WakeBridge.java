@@ -85,10 +85,32 @@ public final class WakeBridge {
         // 聊天段在核心之外（core 不认识 MC 聊天），所以在这里追加——
         // 全仓只有这一处拼摘要，别处不许自己拼（"同一注入点统一装配"）
         String chat = ChatRuntime.turnSegment(modelId);
-        if (chat == null) {
-            return base;
+        String vitals = vitalsSegment(modelId);
+        // 顺序：base · chat · vitals
+        String result = base;
+        if (chat != null) {
+            result = result == null ? "提醒：" + chat : result + " · " + chat;
         }
-        return base == null ? "提醒：" + chat : base + " · " + chat;
+        if (vitals != null) {
+            result = result == null ? vitals : result + " · " + vitals;
+        }
+        return result;
+    }
+
+    /** Vitals 注入段（P2，分析 v3 §3.3）：血/经验/饥饿一行。无载体返回 null。 */
+    private static String vitalsSegment(String modelId) {
+        try {
+            var avatar = io.github.piwugu.snowleopard.AvatarWake.primaryAvatarForInjection(modelId);
+            if (avatar == null) {
+                return null;
+            }
+            return String.format("血 %d/%d · 经验 %d/%d · 饥饿 %d/20",
+                    (int) avatar.getHealth(), (int) avatar.getMaxHealth(),
+                    avatar.getVitalsXp(), avatar.getVitalsXpMax(),
+                    avatar.getVitalsHunger());
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 注入后记账（提示一次）：只标已提示，不动已读游标。 */

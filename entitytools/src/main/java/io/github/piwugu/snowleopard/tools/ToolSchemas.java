@@ -270,11 +270,14 @@ public final class ToolSchemas {
                     "chat.status() → {lastReadSeq, lastScanSeq, pendingMentions, lastSeq, unread}",
                     Map.of("type", "object", "note", "无参数")));
 
-    // ── avatar（M13：载体绑定 / 定时唤醒）──
+    // ── avatar（M13：载体绑定 / 定时唤醒；P2：Vitals）──
     public static final String AVATAR_BIND = "avatar_bind";
     public static final String AVATAR_UNBIND = "avatar_unbind";
     public static final String AVATAR_SCHEDULE = "avatar_schedule";
     public static final String AVATAR_STATUS = "avatar_status";
+    public static final String AVATAR_VITALS = "avatar_vitals";
+    public static final String AVATAR_EAT = "avatar_eat";
+    public static final String AVATAR_HEAL = "avatar_heal";
 
     /** 载体组清单（M13-0 冻结，2026-10-24 01:10 (UTC+8)）。 */
     public static final java.util.List<ToolRegistry.Tool> AVATAR_TOOLS = java.util.List.of(
@@ -290,7 +293,18 @@ public final class ToolSchemas {
                             "interval_sec", "间隔秒数（>=60，下限由配置可抬不可降）")),
             new ToolRegistry.Tool(AVATAR_STATUS, "查询我的载体与唤醒排程",
                     "avatar.status() → {avatars:[{uuid, name, primary, intervalSec, nextFireAt, loaded}]}",
-                    Map.of("type", "object", "note", "无参数")));
+                    Map.of("type", "object", "note", "无参数")),
+            new ToolRegistry.Tool(AVATAR_VITALS, "载体生命体征（只读：经验/饥饿/血/上限）",
+                    "avatar.vitals() → {xp, xpMax, hunger, health, maxHealth, xpPerHp, hpPerTick}",
+                    Map.of("type", "object", "note", "无参数；仅 BOUND 态可用")),
+            new ToolRegistry.Tool(AVATAR_EAT, "从随身背包取食物进食（按 nutrition 回饥饿）",
+                    "avatar.eat(slot?) → {eaten, hungerBefore, hungerAfter}；缺省自动选第一个食物",
+                    Map.of("type", "object", "slot", "可选背包格 0-8（缺省=自动找食物）",
+                            "reversible", "false", "state", "changes_world")),
+            new ToolRegistry.Tool(AVATAR_HEAL, "消耗经验回血（hunger>0 才能用；经验不足按剩余算）",
+                    "avatar.heal(hp?) → {healed, xpCost, xpBefore, xpAfter}；缺省回满",
+                    Map.of("type", "object", "hp", "可选回血量（缺省=回满）",
+                            "reversible", "false", "state", "changes_world")));
 
     // ── craft（合成，2026-10-24 03:55 冻结：配方直合成；裁决=不要求工作台邻接、网格不做）──
     public static final String CRAFT_RECIPES = "craft_recipes";

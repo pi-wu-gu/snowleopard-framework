@@ -33,6 +33,20 @@ public class AvatarEntity extends PathfinderMob
     /** 绑定的模型编号（镜像；权威在 AvatarStore）。 */
     private String boundModel = "";
 
+    // ── Vitals（P2，分析 v3 §3.3/§3.4）──
+    //
+    // 裁决④：属性在实体而非家。所有字段 NBT 持久化（跨重启保留）。
+    // 默认值：xpMax=1000, xpPerHp=2, hpPerTick=0.5, xpPerSecCap=20, hunger=20, hungerDecaySec=30
+
+    private int xp = 0;
+    private int xpMax = 1000;
+    private int xpPerHp = 2;           // 2 经验 = 1 血
+    private float hpPerTick = 0.5F;    // 回血速率
+    private int xpPerSecCap = 20;      // 每秒经验上限（防刷）
+    private int hunger = 20;           // 0-20
+    private int hungerDecaySec = 30;   // 每 30 秒 -1
+    private long lastHungerDecayMs = System.currentTimeMillis();
+
     // ── 视线表现量（v1.14.0，2026-10-27 18:35 (UTC+8)）──
     //
     // 头/瞳孔是**纯客户端表现**，但"看向哪里"由服务端算（服务端有目标坐标、锁定状态、行进方向）。
@@ -166,6 +180,14 @@ public class AvatarEntity extends PathfinderMob
         if (!pickupFilter.isEmpty()) {
             tag.putString("PickupFilter", pickupFilter);
         }
+        // Vitals（P2）
+        tag.putInt("VitalsXp", xp);
+        tag.putInt("VitalsXpMax", xpMax);
+        tag.putInt("VitalsXpPerHp", xpPerHp);
+        tag.putFloat("VitalsHpPerTick", hpPerTick);
+        tag.putInt("VitalsXpPerSecCap", xpPerSecCap);
+        tag.putInt("VitalsHunger", hunger);
+        tag.putInt("VitalsHungerDecaySec", hungerDecaySec);
     }
 
     @Override
@@ -180,6 +202,14 @@ public class AvatarEntity extends PathfinderMob
         boundModel = tag.contains("SnowModelId") ? tag.getString("SnowModelId") : "";
         // 开关同理由原版 "CanPickUpLoot" → setCanPickUpLoot 回来
         pickupFilter = tag.contains("PickupFilter") ? tag.getString("PickupFilter") : "";
+        // Vitals（P2）
+        xp = tag.getInt("VitalsXp");
+        xpMax = tag.contains("VitalsXpMax") ? tag.getInt("VitalsXpMax") : 1000;
+        xpPerHp = tag.contains("VitalsXpPerHp") ? tag.getInt("VitalsXpPerHp") : 2;
+        hpPerTick = tag.contains("VitalsHpPerTick") ? tag.getFloat("VitalsHpPerTick") : 0.5F;
+        xpPerSecCap = tag.contains("VitalsXpPerSecCap") ? tag.getInt("VitalsXpPerSecCap") : 20;
+        hunger = tag.contains("VitalsHunger") ? tag.getInt("VitalsHunger") : 20;
+        hungerDecaySec = tag.contains("VitalsHungerDecaySec") ? tag.getInt("VitalsHungerDecaySec") : 30;
     }
 
     // ── 随身背包（九格，NBT 持久化；经 PackCarrier 接口暴露给物品工具）──
@@ -278,6 +308,80 @@ public class AvatarEntity extends PathfinderMob
             itemEntity.setThrower(this);
         }
         return itemEntity;
+    }
+
+    // ── Vitals getter/setter（P2）──
+
+    public int getVitalsXp() { return xp; }
+    public void setVitalsXp(int v) { this.xp = Math.max(0, Math.min(v, xpMax)); }
+    public int getVitalsXpMax() { return xpMax; }
+    public void setVitalsXpMax(int v) { this.xpMax = Math.max(1, v); }
+    public int getVitalsXpPerHp() { return xpPerHp; }
+    public void setVitalsXpPerHp(int v) { this.xpPerHp = Math.max(1, v); }
+    public float getVitalsHpPerTick() { return hpPerTick; }
+    public void setVitalsHpPerTick(float v) { this.hpPerTick = Math.max(0.01F, v); }
+    public int getVitalsXpPerSecCap() { return xpPerSecCap; }
+    public void setVitalsXpPerSecCap(int v) { this.xpPerSecCap = Math.max(1, v); }
+    public int getVitalsHunger() { return hunger; }
+    public void setVitalsHunger(int v) { this.hunger = Math.max(0, Math.min(v, 20)); }
+    public int getVitalsHungerDecaySec() { return hungerDecaySec; }
+    public void setVitalsHungerDecaySec(int v) { this.hungerDecaySec = Math.max(1, v); }
+
+    /** 经验充值（来源：击杀/经验瓶/测试充值）。返回实际增加量。 */
+    public int addXp(int amount) {
+        int before = xp;
+        setVitalsXp(xp + amount);
+        return xp - before;
+    }
+
+    /** 消耗经验回血。返回实际回血量（hunger==0 时禁用；经验不足时按剩余算）。 */
+    public float healByXp(float requestedHp) {
+        if (hunger <= 0) {
+            return 0;   // 饥饿归零：禁用经验回血（裁决⑤）
+        }
+        float maxHp = getMaxHealth();
+        float currentHp = getHealth();
+        float missing = maxHp - currentHp;
+        float want = Math.min(requestedHp, missing);
+        int cost = (int) Math.ceil(want * xpPerHp);
+        cost = Math.min(cost, xp);
+        if (cost <= 0) {
+            return 0;
+        }
+        float healed = cost / (float) xpPerHp;
+        xp -= cost;
+        setHealth(currentHp + healed);
+        return healed;
+    }
+
+    /** 进食：按 nutrition 回饥饿。返回实际回的饥饿值。 */
+    public int eatFood(int nutrition) {
+        int before = hunger;
+        setVitalsHunger(hunger + nutrition);
+        return hunger - before;
+    }
+
+    /**
+     * Hunger 递减（由 AvatarWake 的 serverTick 调用）。
+     * 缺省每 30 秒 -1；hunger==0 时移速 ×0.85（裁决⑤"连带"）。
+     */
+    public void tickVitals() {
+        long now = System.currentTimeMillis();
+        if (now - lastHungerDecayMs >= hungerDecaySec * 1000L) {
+            lastHungerDecayMs = now;
+            if (hunger > 0) {
+                setVitalsHunger(hunger - 1);
+            }
+        }
+        // hunger 影响移速：hunger==0 → ×0.85（裁决⑤）
+        var speedAttr = getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED);
+        if (speedAttr != null) {
+            double base = 0.25;
+            double target = hunger <= 0 ? base * 0.85 : base;
+            if (Math.abs(speedAttr.getValue() - target) > 0.001) {
+                speedAttr.setBaseValue(target);
+            }
+        }
     }
 
     /** 调试用/文档用：标识这个实体是载体。 */

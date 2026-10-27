@@ -147,6 +147,12 @@ public final class AvatarWake {
         if (!(event.getEntity() instanceof ServerPlayer player)) {
             return;
         }
+        // ── 投喂（P2，裁决⑤⑥）──
+        // 主副手优先级：主手可用→主手；主手不可用+副手可用→副手；两侧都可用→主手
+        // EntityInteract 对主副手各触发一次 → 只在 MAIN_HAND 时处理"两侧都可用"的情形
+        if (tryFeed(avatar, player, event)) {
+            return;   // 喂了就不再走唤醒
+        }
         ItemStack hand = event.getItemStack();
         String item = hand.isEmpty() ? "空手" : hand.getItem().toString().substring(hand.getItem().toString().lastIndexOf('.') + 1);
         String handName = event.getHand() == InteractionHand.OFF_HAND ? "副手" : "主手";
@@ -155,6 +161,53 @@ public final class AvatarWake {
                 "玩家 " + player.getGameProfile().getName() + " 用" + handName
                         + "右键了你（" + item + "，位置 " + pos(player) + "）",
                 player);
+    }
+
+    /**
+     * 尝试投喂（P2，裁决⑤⑥）。返回 true=已喂。
+     * 主副手优先级：主手食物→用主手；主手无+副手食物→用副手；都食物→主手。
+     * EntityInteract 双触发：只在 MAIN_HAND 且主手无食物时才检查副手。
+     */
+    private static boolean tryFeed(AvatarEntity avatar, ServerPlayer player,
+                                   PlayerInteractEvent.EntityInteract event) {
+        ItemStack main = player.getMainHandItem();
+        ItemStack off = player.getOffhandItem();
+        boolean mainFood = isFood(main);
+        boolean offFood = isFood(off);
+
+        // 两侧都无食物 → 不是投喂
+        if (!mainFood && !offFood) {
+            return false;
+        }
+        // EntityInteract 对主副手各触发一次：
+        // - 主手有食物：只在 MAIN_HAND 处理（OFF_HAND 那次跳过，否则喂两口）
+        // - 主手无食物+副手有：只在 OFF_HAND 处理（MAIN_HAND 那次跳过）
+        if (mainFood && event.getHand() != InteractionHand.MAIN_HAND) {
+            return false;
+        }
+        if (!mainFood && offFood && event.getHand() != InteractionHand.OFF_HAND) {
+            return false;
+        }
+
+        // 用哪只手
+        ItemStack food = mainFood ? main : off;
+        var foodComp = food.get(net.minecraft.core.component.DataComponents.FOOD);
+        int nutrition = foodComp != null ? foodComp.nutrition() : 4;
+        int hungerBefore = avatar.getVitalsHunger();
+        int recovered = avatar.eatFood(nutrition);
+        // 少量回血（投喂附带；经验回血是 avatar_heal 的职责）
+        float hpBonus = Math.min(2.0F, avatar.getMaxHealth() - avatar.getHealth());
+        if (hpBonus > 0 && avatar.getVitalsHunger() > 0) {
+            avatar.setHealth(avatar.getHealth() + hpBonus);
+        }
+        food.shrink(1);
+        player.displayClientMessage(
+                net.minecraft.network.chat.Component.literal(
+                        String.format("§a[投喂] %s 回饥饿 %d/%d → %d/%d，回血 +%.0f",
+                                (mainFood ? "主手" : "副手"), hungerBefore, 20,
+                                avatar.getVitalsHunger(), 20, hpBonus)),
+                true);
+        return true;
     }
 
     /** 被打 → 唤醒（裁决 1：**可配置**，默认开；关掉后这里直接跳过）。 */
@@ -331,6 +384,19 @@ public final class AvatarWake {
             return;
         }
         runScheduler(event.getServer());
+        // Vitals 递减（P2）：hunger 随时间 -1，hunger==0 时移速 ×0.85
+        tickAllVitals(event.getServer());
+    }
+
+    /** 给所有在线载体跑 vitals tick（P2）。 */
+    private static void tickAllVitals(MinecraftServer server) {
+        for (var level : server.getAllLevels()) {
+            for (Entity e : level.getEntities().getAll()) {
+                if (e instanceof AvatarEntity avatar) {
+                    avatar.tickVitals();
+                }
+            }
+        }
     }
 
     /** 调度器本体（自测直接调，绕开 tick 计数）。 */
@@ -408,8 +474,11 @@ public final class AvatarWake {
             }
             case "avatar_schedule" -> schedule(model, params);
             case "avatar_status" -> status(model);
+            case "avatar_vitals" -> vitals(model);
+            case "avatar_eat" -> eat(model, params);
+            case "avatar_heal" -> heal(model, params);
             default -> Result.error("未知的载体工具: " + tool
-                    + "（可用: avatar_bind / avatar_unbind / avatar_schedule / avatar_status）");
+                    + "（可用: avatar_bind / avatar_unbind / avatar_schedule / avatar_status / avatar_vitals / avatar_eat / avatar_heal）");
         };
     }
 
@@ -467,6 +536,117 @@ public final class AvatarWake {
             out.add(m);
         }
         return Result.ok(Map.of("avatars", out));
+    }
+
+    // ── Vitals（P2，分析 v3 §3.3/§3.4）──
+
+    private static AvatarEntity primaryAvatar(String model) {
+        for (AvatarStore.Entry e : store.byModel(model)) {
+            if (!e.primary()) {
+                continue;
+            }
+            var entity = findEntity(server(), e.uuid());
+            if (entity instanceof AvatarEntity avatar) {
+                return avatar;
+            }
+        }
+        return null;
+    }
+
+    /** 供 WakeBridge 注入用（P2 vitals 段）。 */
+    public static AvatarEntity primaryAvatarForInjection(String model) {
+        return primaryAvatar(model);
+    }
+
+    private static Result vitals(String model) {
+        AvatarEntity avatar = primaryAvatar(model);
+        if (avatar == null) {
+            return Result.error("主载体不在线——先用 avatar_bind 登记载体");
+        }
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("xp", avatar.getVitalsXp());
+        out.put("xpMax", avatar.getVitalsXpMax());
+        out.put("hunger", avatar.getVitalsHunger());
+        out.put("health", avatar.getHealth());
+        out.put("maxHealth", avatar.getMaxHealth());
+        out.put("xpPerHp", avatar.getVitalsXpPerHp());
+        out.put("hpPerTick", avatar.getVitalsHpPerTick());
+        return Result.ok(out);
+    }
+
+    private static Result eat(String model, Map<String, Object> params) {
+        AvatarEntity avatar = primaryAvatar(model);
+        if (avatar == null) {
+            return Result.error("主载体不在线");
+        }
+        // 从九格包找食物（DataComponents.FOOD）
+        int slot = -1;
+        Object slotObj = params == null ? null : params.get("slot");
+        if (slotObj instanceof Number n) {
+            slot = n.intValue();
+        }
+        net.minecraft.world.Container pack = avatar.pack();
+        if (slot >= 0 && slot < pack.getContainerSize()) {
+            var stack = pack.getItem(slot);
+            if (isFood(stack)) {
+                return doEat(avatar, slot);
+            }
+            return Result.error("背包格 " + slot + " 不是食物");
+        }
+        // 自动找第一个食物
+        for (int i = 0; i < pack.getContainerSize(); i++) {
+            if (isFood(pack.getItem(i))) {
+                return doEat(avatar, i);
+            }
+        }
+        return Result.error("背包里没有食物");
+    }
+
+    private static boolean isFood(net.minecraft.world.item.ItemStack stack) {
+        return !stack.isEmpty()
+                && stack.has(net.minecraft.core.component.DataComponents.FOOD);
+    }
+
+    private static Result doEat(AvatarEntity avatar, int slot) {
+        var pack = avatar.pack();
+        var stack = pack.getItem(slot);
+        var food = stack.get(net.minecraft.core.component.DataComponents.FOOD);
+        int nutrition = food != null ? food.nutrition() : 4;
+        int hungerBefore = avatar.getVitalsHunger();
+        int recovered = avatar.eatFood(nutrition);
+        stack.shrink(1);
+        return Result.ok(Map.of(
+                "eaten", true,
+                "hungerBefore", hungerBefore,
+                "hungerAfter", avatar.getVitalsHunger(),
+                "recovered", recovered));
+    }
+
+    private static Result heal(String model, Map<String, Object> params) {
+        AvatarEntity avatar = primaryAvatar(model);
+        if (avatar == null) {
+            return Result.error("主载体不在线");
+        }
+        if (avatar.getVitalsHunger() <= 0) {
+            return Result.error("饥饿归零，不能使用经验回血");
+        }
+        float hpRequest;
+        Object hpObj = params == null ? null : params.get("hp");
+        if (hpObj instanceof Number n) {
+            hpRequest = n.floatValue();
+        } else {
+            hpRequest = avatar.getMaxHealth() - avatar.getHealth();   // 缺省回满
+        }
+        int xpBefore = avatar.getVitalsXp();
+        float healed = avatar.healByXp(hpRequest);
+        if (healed <= 0) {
+            return Result.error("经验不足或血量已满");
+        }
+        return Result.ok(Map.of(
+                "healed", healed,
+                "xpCost", xpBefore - avatar.getVitalsXp(),
+                "xpBefore", xpBefore,
+                "xpAfter", avatar.getVitalsXp()));
     }
 
     // ------------------------------------------------------------- 内部
