@@ -252,7 +252,11 @@ public final class AiHost {
             // role=compress：**必须待在文本模型上**。原来走 chat("", …) → start=0 → 永远用
             // providers[0]，一旦把视觉模型放首位，记忆压缩就被带偏了（2026-10-27 05:50 (UTC+8)）
             return (purpose, sourceText) -> c.complete(LlmConfig.ROLE_COMPRESS,
-                    "你是记忆压缩器。把源文本压缩为要点摘要，保留事实与时间戳，不要评论、不要客套。",
+                    "你是记忆索引器。把源文本压缩为极简索引——每条一行，只写"做了什么"，" +
+                    "不写细节、不写过程、不写时间戳（时间戳由外层格式自带）。" +
+                    "细节已保存在原始数据中，无需在此重复。不要评论、不要客套。" +
+                    "\n输出格式：每行一条，格式为 '<标识>: <一句话概括>'。" +
+                    "\n示例：'round_042836: 自检三项全通过，破坏地板并补回'。",
                     "用途: " + purpose + "\n源文本:\n" + sourceText);
         } catch (Exception e) {
             SnowLeopardMod.LOG.warn("[雪豹框架][host] Compressor 注入失败（记忆吸收走直通）: {}", e.getMessage());
