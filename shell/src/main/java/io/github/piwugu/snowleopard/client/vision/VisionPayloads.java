@@ -87,6 +87,10 @@ public final class VisionPayloads {
         if (!net.neoforged.fml.loading.FMLEnvironment.dist.isClient()) {
             return;
         }
+        // 入口留痕：区分"包没到客户端"与"到了但渲染不了"——否则两种情况在两侧日志里都只是空白
+        io.github.piwugu.snowleopard.SnowLeopardMod.LOG.info(
+                "[雪豹框架][视觉] 客户端收到请求 {}（实体 {} · {}x{}）",
+                req.reqId(), req.entityId(), req.width(), req.height());
         ctx.enqueueWork(() -> io.github.piwugu.snowleopard.client.vision.PovCapture.onRequest(req));
     }
 

@@ -104,7 +104,7 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
                 .addBox(-6F, -5.55F, -4.5F, 12F, 0.05F, 4F, new CubeDeformation(0F))
                 .texOffs(10, 24)
                 .addBox(6F, -5.5F, -4.5F, 0.05F, 11F, 4F, new CubeDeformation(0F)),
-                PartPose.offset(0F, 9.6F, -1.5F));
+                PartPose.offset(0F, 8.6F, -1.5F));
 
         PartDefinition bodyMid = body.addOrReplaceChild("body_mid",
                 CubeListBuilder.create()
@@ -167,9 +167,9 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
         PartDefinition eyes = head.addOrReplaceChild("eyes",
                 CubeListBuilder.create()
                 .texOffs(98, 58)
-                .addBox(-3F, -5.5F, -6.12F, 2F, 2F, 1F, new CubeDeformation(-0.1F))
+                .addBox(-3F, -5.5F, -6.17F, 2F, 2F, 1F, new CubeDeformation(-0.1F))
                 .texOffs(105, 58)
-                .addBox(1F, -5.5F, -6.12F, 2F, 2F, 1F, new CubeDeformation(-0.1F)),
+                .addBox(1F, -5.5F, -6.17F, 2F, 2F, 1F, new CubeDeformation(-0.1F)),
                 PartPose.offset(0F, 0F, 0F));
 
         PartDefinition eyeLidLeft = eyes.addOrReplaceChild("eye_lid_left",
@@ -199,25 +199,25 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
         PartDefinition legFrontLeft = body.addOrReplaceChild("leg_front_left",
                 CubeListBuilder.create()
                 .texOffs(52, 24)
-                .addBox(-1.5F, 0F, -2F, 3F, 10F, 4F, new CubeDeformation(0F)),
+                .addBox(-1.5F, 0F, -2F, 3F, 11F, 4F, new CubeDeformation(0F)),
                 PartPose.offset(-4F, 4.4F, -9.5F));
 
         PartDefinition legFrontRight = body.addOrReplaceChild("leg_front_right",
                 CubeListBuilder.create()
                 .texOffs(82, 24)
-                .addBox(-1.5F, 0F, -2F, 3F, 10F, 4F, new CubeDeformation(0F)),
+                .addBox(-1.5F, 0F, -2F, 3F, 11F, 4F, new CubeDeformation(0F)),
                 PartPose.offset(4F, 4.4F, -9.5F));
 
         PartDefinition legHindRight = body.addOrReplaceChild("leg_hind_right",
                 CubeListBuilder.create()
                 .texOffs(97, 24)
-                .addBox(-1.5F, 0F, -2F, 3F, 10F, 4F, new CubeDeformation(0F)),
+                .addBox(-1.5F, 0F, -2F, 3F, 11F, 4F, new CubeDeformation(0F)),
                 PartPose.offset(3.4F, 4.4F, 11.5F));
 
         PartDefinition legHindLeft = body.addOrReplaceChild("leg_hind_left",
                 CubeListBuilder.create()
                 .texOffs(67, 24)
-                .addBox(-1.5F, 0F, -2F, 3F, 10F, 4F, new CubeDeformation(0F)),
+                .addBox(-1.5F, 0F, -2F, 3F, 11F, 4F, new CubeDeformation(0F)),
                 PartPose.offset(-3.4F, 4.4F, 11.5F));
 
         PartDefinition tail1 = body.addOrReplaceChild("tail_1",
@@ -318,8 +318,8 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
 
         // 耳朵：低频抖动
         float flick = Mth.cos(ageInTicks * 0.1F) * 0.05F;
-        this.earLeft.zRot = 0.3491F + flick;
-        this.earRight.zRot = -0.3491F - flick;
+        this.earRight.zRot = -0.3491F + flick;
+        this.earLeft.zRot = 0.3491F - flick;
 
         // 眨眼：眼皮默认隐藏（本模型眼皮与眼白同尺寸，静态显示会盖住眼睛），
         // 每 100 tick 眨一次、闭合 4 tick。要改成"默认闭合"只翻转两个分支即可。
@@ -333,12 +333,12 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
         // 瞳孔掉到眼睛组 pivot（= 头的 pivot 高度），看起来就是"跑到下颚中间"。
         float gazeX = Mth.clamp(netHeadYaw * 0.008F, -0.2F, 0.2F);
         float gazeY = Mth.clamp(headPitch * 0.006F, -0.15F, 0.15F);
-        this.eyePupilRight.resetPose();
-        this.eyePupilRight.x += gazeX;
-        this.eyePupilRight.y += gazeY;
         this.eyePupilLeft.resetPose();
         this.eyePupilLeft.x += gazeX;
         this.eyePupilLeft.y += gazeY;
+        this.eyePupilRight.resetPose();
+        this.eyePupilRight.x += gazeX;
+        this.eyePupilRight.y += gazeY;
 
         // 下颚：jawOpen 0=闭 1=张，由宿主状态（被打/说话/进食）驱动
         this.jaw.xRot = 0.1745F - this.jawOpen * 0.45F;

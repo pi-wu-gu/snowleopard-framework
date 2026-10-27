@@ -423,6 +423,14 @@ final class ClientSmokeTest {
                 vtext.contains("vision") && vtext.contains("level=") && vtext.contains("render="),
                 brief(vres));
 
+        //    (k2) L0 真图（v1.12.8）：配了 multimodal 提供商且渲染后端可用 → 能力级必须是 L0。
+        //        这是"加了 VLM 但没生效"的唯一可观测面：roles 指错家、roles.vision 指向非多模态、
+        //        名字打错被静默回落，都会停在 L1（图落盘了，但模型看不了），而**工具照样返回 Ok**。
+        String vline = io.github.piwugu.snowleopard.host.AiHost.visionStatusLine();
+        ok("视觉能力升到 L0（VLM 就绪：真图进上下文）",
+                vline.contains("level=L0") && vline.contains("vlm=true") && vline.contains("render=true"),
+                vline);
+
         //    (l) 视觉 B 档（v1.12.5）：射线必须**真的沿视线**命中，且转身 180° 后不再命中。
         //        单向断言抓不到"方向反了"（射线往反方向也照样能命中别的方块），所以必须双向。
         var eye = avatar.getEyePosition(1.0f);

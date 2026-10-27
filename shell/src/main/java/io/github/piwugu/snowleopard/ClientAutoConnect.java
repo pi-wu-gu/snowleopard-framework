@@ -26,6 +26,11 @@ public final class ClientAutoConnect {
 
     private static boolean done;
     private static int attempts;
+    /** 下次允许尝试的时间（毫秒）——**重试必须按时间，不能按 tick**。 */
+    private static long nextTryAt;
+    /** 两次尝试之间至少隔多久：一次连接握手要几秒，隔 tick 重发只会把配额瞬间烧光。 */
+    private static final long RETRY_INTERVAL_MS = 1500L;
+    private static final int MAX_ATTEMPTS = 20;
 
     private ClientAutoConnect() {
     }
@@ -44,19 +49,29 @@ public final class ClientAutoConnect {
             done = true;   // 已经连上了
             return;
         }
-        if (!(mc.screen instanceof TitleScreen) && mc.screen != null) {
-            return;   // 还在加载/错误界面
-        }
-        // 标题界面出现后重试若干次：加载覆盖层还没撤时发起连接会被静默吞掉（踩过）
-        if (++attempts > 6) {
-            done = true;
-            SnowLeopardMod.LOG.error("[雪豹框架][CLIENT] 自动连接放弃（6 次尝试均未连上）");
+        // 连失败会停在"连接断开"界面，那不是标题界面；不主动回标题就会一直卡在
+        // `return` 分支（v1.12.8 真机：手动进服前整整 3 秒只发了 1 次真连接）
+        if (mc.screen instanceof net.minecraft.client.gui.screens.DisconnectedScreen) {
+            mc.setScreen(new TitleScreen());
             return;
+        }
+        if (!(mc.screen instanceof TitleScreen) && mc.screen != null) {
+            return;   // 还在加载/连接进度界面
         }
         if (mc.getOverlay() != null) {
             return;   // 加载覆盖层还在：此时发起连接会被静默吞掉（踩过）
         }
-        SnowLeopardMod.LOG.info("[雪豹框架][CLIENT] 自动连接 {}", addr);
+        long now = System.currentTimeMillis();
+        if (now < nextTryAt) {
+            return;   // 等间隔——**不要在这里累加 attempts**（那正是旧版把 6 次配额在 0.3 秒内烧光的 bug）
+        }
+        nextTryAt = now + RETRY_INTERVAL_MS;
+        if (++attempts > MAX_ATTEMPTS) {
+            done = true;
+            SnowLeopardMod.LOG.error("[雪豹框架][CLIENT] 自动连接放弃（{} 次尝试均未连上 {}）", MAX_ATTEMPTS, addr);
+            return;
+        }
+        SnowLeopardMod.LOG.info("[雪豹框架][CLIENT] 自动连接 {}（第 {} 次）", addr, attempts);
         ServerAddress target = ServerAddress.parseString(addr);
         ServerData data = new ServerData("snowleopard-test", addr, ServerData.Type.OTHER);
         mc.execute(() -> ConnectScreen.startConnecting(new TitleScreen(), mc, target, data,

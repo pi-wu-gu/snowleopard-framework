@@ -87,6 +87,9 @@ public final class ClientVisionBackend implements VisionBackend {
             return;
         }
         if (r.error() != null && !r.error().isBlank()) {
+            // **失败必须留痕**：客户端回执带了原因却只写进 pending，服务端日志里只剩
+            // "超时/失败"，排查时无法区分"没收到包"和"收到了但渲染不了"（v1.12.8 实证）
+            SnowLeopardMod.LOG.warn("[雪豹框架][视觉] 回执 {} 失败：{}", r.reqId(), r.error());
             VisionPending.failed(r.reqId(), r.error());
             return;
         }

@@ -46,23 +46,28 @@ public final class PovCapture {
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null || mc.player == null) {
+            SnowLeopardMod.LOG.warn("[雪豹框架][视觉] 拒绝 {}：客户端尚未进入世界", req.reqId());
             reply(req, null, "客户端尚未进入世界");
             return;
         }
-        Entity e = level.getEntity(req.entityId());
-        if (e == null) {
-            // 最可能的原因：载体离本客户端太远，实体/区块没加载
-            reply(req, null, "载体不在本客户端可见范围（区块未加载）");
-            return;
-        }
         if (pending != null) {
+            SnowLeopardMod.LOG.warn("[雪豹框架][视觉] 拒绝 {}：上一张仍在渲染", req.reqId());
             reply(req, null, "上一张仍在渲染");
             return;
         }
+        // **实体可能还没到**（v1.12.8 真机实证）：玩家刚 join 时客户端还在收区块/实体包，
+        // 这时 getEntity 查不到。立刻拒绝是不对的——服务端明明判定过"距载体 3 格、区块已加载"，
+        // 只是客户端的同步晚了几十几百毫秒。所以挂起等它出现，由 onRenderStage 每帧重试。
+        Entity e = level.getEntity(req.entityId());
         pending = req;
         target = e;
         armedAt = System.currentTimeMillis();
-        mc.setCameraEntity(e);       // 下一帧相机就是载体视角
+        if (e != null) {
+            mc.setCameraEntity(e);   // 下一帧相机就是载体视角
+        } else {
+            SnowLeopardMod.LOG.info("[雪豹框架][视觉] 请求 {} 已挂起：实体 {} 尚未同步到客户端，等它出现",
+                    req.reqId(), req.entityId());
+        }
     }
 
     /** 每帧末尾：相机确实是载体时抓一帧，然后立刻还原。 */
@@ -76,13 +81,29 @@ public final class PovCapture {
         }
         Minecraft mc = Minecraft.getInstance();
         if (System.currentTimeMillis() - armedAt > 3000) {
-            // 三秒还没等到相机切换（被别的模组抢了相机？）——如实失败，别把玩家视角一直挂着
+            // 三秒还没等到相机切换（实体没同步 / 被别的模组抢了相机）——如实失败，别把玩家视角一直挂着
             VisionPayloads.Request req = pending;
+            boolean noEntity = target == null;
             pending = null;
             target = null;
             mc.setCameraEntity(mc.player);
-            reply(req, null, "相机切换超时（可能被其它模组占用）");
+            reply(req, null, noEntity
+                    ? "载体 3 秒内未出现在本客户端（区块/实体尚未同步，或载体离客户端太远）"
+                    : "相机切换超时（可能被其它模组占用）");
+            SnowLeopardMod.LOG.warn("[雪豹框架][视觉] 截图超时 {}：{}", req.reqId(),
+                    noEntity ? "实体始终未同步" : "相机未切过来");
             return;
+        }
+        if (target == null) {
+            // 挂起态：每帧重试解析实体（玩家刚 join / 区块还在传时会晚到几百毫秒）
+            Entity late = mc.level == null ? null : mc.level.getEntity(pending.entityId());
+            if (late == null) {
+                return;
+            }
+            target = late;
+            mc.setCameraEntity(late);
+            SnowLeopardMod.LOG.info("[雪豹框架][视觉] 实体 {} 已同步，开始截图 {}", late.getId(), pending.reqId());
+            return;                  // 下一帧再抓（相机要一帧才生效）
         }
         if (mc.getCameraEntity() != target) {
             return;                  // 本帧相机还没换过来，等下一帧
