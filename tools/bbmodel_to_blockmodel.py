@@ -15,6 +15,10 @@ java_block JSON 是 16 单位 = 1 格，故几何体绕 (8,8,8) 整体放大 16 
     p_json = (p_bb - 8) * 16 + 8    →    跨度 -8.8 .. 24.8（合法区间 [-16, 32]）
 UV/贴图不缩放（与 Blockbench 预览同观感）。源 bbmodel 改动后必须重跑本脚本（产物过期铁律）。
 
+--target-blocks：目标视觉尺寸（格）。缩放系数 = target / 原始跨度。
+  例：--target-blocks 0.2 → 2.1 格缩到 0.2 格（系数 0.0952），JSON 跨度 6.4..9.6。
+  不传 = 不缩放（保持原始 2.1 格口径）。
+
 只支持无旋转 cube（原版 JSON 只能表达 ±22.5/±45 单轴旋转）；遇旋转直接报错，不静默丢。
 """
 
@@ -30,6 +34,7 @@ MODID = "snowleopard"
 BLOCK_ID = "shackled_core"
 CENTER = 8.0          # bbmodel 与 java_block JSON 共用的方块中心
 SCALE = 16.0          # 1 模型单位 = 1 格 = 16 JSON 单位
+VISUAL_FACTOR = 1.0   # 视觉缩放系数（--target-blocks 自动计算，默认不缩放）
 
 
 # ---------- bbmodel → 方块模型 ----------
@@ -51,7 +56,7 @@ def check_no_rotation(model: dict) -> None:
 
 
 def scale_point(p):
-    return [round((float(v) - CENTER) * SCALE + CENTER, 4) for v in p]
+    return [round((float(v) - CENTER) * SCALE * VISUAL_FACTOR + CENTER, 4) for v in p]
 
 
 def convert_elements(model: dict) -> list:
@@ -316,10 +321,21 @@ def main() -> None:
     ap.add_argument("bbmodel", type=Path, help="受限核心.bbmodel")
     ap.add_argument("resources", type=Path, help="shell/src/main/resources 目录")
     ap.add_argument("--preview", type=Path, default=None, help="可选：输出等轴预览 PNG")
+    ap.add_argument("--target-blocks", type=float, default=None,
+                    help="目标视觉尺寸（格）。例：0.2 = 缩到 0.2 格。不传 = 不缩放")
     args = ap.parse_args()
 
+    global VISUAL_FACTOR
     model = load_bbmodel(args.bbmodel)
     check_no_rotation(model)
+
+    els = model["elements"]
+    lo = min(min(el["from"]) for el in els)
+    hi = max(max(el["to"]) for el in els)
+    span = hi - lo
+    if args.target_blocks is not None:
+        VISUAL_FACTOR = args.target_blocks / span
+        print(f"[缩放] 原始跨度 {round(span,2)} 格 → 目标 {args.target_blocks} 格（系数 {round(VISUAL_FACTOR,6)}）")
 
     texture_path = args.resources / f"assets/{MODID}/textures/block/{BLOCK_ID}.png"
     model_path = args.resources / f"assets/{MODID}/models/block/{BLOCK_ID}.json"
@@ -329,13 +345,12 @@ def main() -> None:
         json.dump(build_model_json(model), f, ensure_ascii=False, indent=2)
         f.write("\n")
 
-    els = model["elements"]
-    lo = min(min(el["from"]) for el in els)
-    hi = max(max(el["to"]) for el in els)
     print(f"[生成] {model_path}")
     print(f"[生成] {texture_path}")
-    print(f"[口径] bbmodel {lo}..{hi}（≈{hi - lo} 格）→ JSON 跨度 "
-          f"{round((lo - CENTER) * SCALE + CENTER, 2)}..{round((hi - CENTER) * SCALE + CENTER, 2)} 单位")
+    print(f"[口径] bbmodel {lo}..{hi}（≈{round(span,2)} 格）→ JSON 跨度 "
+          f"{round((lo - CENTER) * SCALE * VISUAL_FACTOR + CENTER, 2)}.."
+          f"{round((hi - CENTER) * SCALE * VISUAL_FACTOR + CENTER, 2)} 单位"
+          f"（视觉 {round(span * VISUAL_FACTOR, 3)} 格）")
     print(f"[元素] {len(els)} 个 cube（无旋转）")
 
     if args.preview:
