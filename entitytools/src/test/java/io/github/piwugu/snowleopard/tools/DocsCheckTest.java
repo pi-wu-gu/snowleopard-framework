@@ -11,6 +11,8 @@ import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Test;
 
+import snowleopard.core.registry.ToolRegistry;
+
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -30,7 +32,11 @@ class DocsCheckTest {
             "docs/AI执行端设计-2026-10-24.md",
             "docs/开发说明-2026-10-23.md",
             "docs/客户端验收通道-2026-10-23.md",
+            "docs/工具清单-2026-10-27.md",
     };
+
+    /** 工具清单（新增/改名工具必须同步改表）。 */
+    private static final String INVENTORY = "docs/工具清单-2026-10-27.md";
 
     private static Path root() {
         Path p = Path.of("").toAbsolutePath().normalize();
@@ -94,6 +100,40 @@ class DocsCheckTest {
             }
         }
         assertTrue(missingTools.isEmpty(), "接入文档逐组都有小节：" + missingTools);
+    }
+
+    /**
+     * 工具清单必须列全（2026-10-27）：口径数字 + 每组全名 + 每个工具名 + 实现路径列。
+     *
+     * <p>为什么用"文档断言"而不是只靠人工：v1.12.9 的教训是"清单教一套、实现接一套"——
+     * 工具定义齐了但没挂进清单，四个版本都没人发现。表与 {@code ToolSchemas} 同源校验，
+     * 新增工具忘了改表就是构建红，而不是等模型问"你能看到什么"。
+     */
+    @Test
+    void toolInventoryListsEveryTool() throws IOException {
+        String doc = read(INVENTORY);
+        List<List<ToolRegistry.Tool>> all = List.of(
+                ToolSchemas.SENSE_TOOLS, ToolSchemas.ENTITY_TOOLS, ToolSchemas.SELF_TOOLS,
+                ToolSchemas.VIEW_TOOLS, ToolSchemas.INTERACT_TOOLS, ToolSchemas.MOVE_TOOLS,
+                ToolSchemas.ITEM_TOOLS, ToolSchemas.WORLD_TOOLS, ToolSchemas.WATCH_TOOLS,
+                ToolSchemas.CHAT_TOOLS, ToolSchemas.AVATAR_TOOLS, ToolSchemas.VISION_TOOLS,
+                ToolSchemas.CRAFT_TOOLS);
+        int tools = all.stream().mapToInt(List::size).sum();
+        assertTrue(doc.contains(GroupNames.ALL.size() + " 组 " + tools + " 工具"),
+                "清单口径 == 运行时（" + GroupNames.ALL.size() + " 组 " + tools + " 工具）");
+        for (String g : GroupNames.ALL) {
+            assertTrue(doc.contains("mod:snowleopard:" + g), "清单列了组 mod:snowleopard:" + g);
+        }
+        List<String> missing = new ArrayList<>();
+        for (List<ToolRegistry.Tool> list : all) {
+            for (ToolRegistry.Tool t : list) {
+                if (!doc.contains(t.name())) {
+                    missing.add(t.name());
+                }
+            }
+        }
+        assertTrue(missing.isEmpty(), "清单列全每个工具：" + missing);
+        assertTrue(doc.contains("EntityToolsModule.java#"), "清单带实现路径列（不是只有名字）");
     }
 
     /** 版本链：文档写的 core 版本 == gradle.properties 里的（两处不同步就是"内嵌了旧核心"）。 */
