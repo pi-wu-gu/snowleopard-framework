@@ -442,17 +442,21 @@ final class ClientSmokeTest {
                         && "show".equals(io.github.piwugu.snowleopard.host.AiHost.realNameOf("vision_show")),
                 "vision_shot→" + shotReal);
 
-        //    (k4) 工具分组按话题排序（v1.12.10）：79 个工具平铺时模型对**清单末尾**视而不见
-        //        （实测：vision 在末位 → deepseek-flash 一次都没调；移到最前 → 稳定命中）。
-        //        这条断言的是"分组真的参与了排序"，不是"分组字段存在"。
-        var gVision = io.github.piwugu.snowleopard.host.AiHost.routedGroupsForTest("你前面那面墙是什么颜色？");
-        var gMove = io.github.piwugu.snowleopard.host.AiHost.routedGroupsForTest("走过去把箱子里的东西捡起来");
-        boolean grouped = !gVision.isEmpty() && "vision".equals(gVision.get(0))
-                && gMove.indexOf("move") >= 0 && gMove.indexOf("move") <= 3
-                && gMove.indexOf("item") >= 0 && gMove.indexOf("item") <= 3;
-        ok("工具分组按话题生效（视觉常驻最前，移动/物品话题相应提前）", grouped,
-                "视觉话题=" + gVision.subList(0, Math.min(3, gVision.size()))
-                        + " · 移动话题=" + gMove.subList(0, Math.min(4, gMove.size())));
+        //    (k4) 工具声明跟随工作集（v1.13.0，取代 v1.12.10 的"按话题排序"）：
+        //        默认只声明目录组三件；tool_help/tool_scope 取用某组后，**下一轮**才带出那组的签名。
+        //        断言的是"声明集合真的跟着工作集变"，不是"分组字段存在"。
+        var core0 = SnowLeopardMod.core();
+        String selftestModel = "clienttest";
+        core0.exposure().clear(selftestModel);
+        var baseNames = io.github.piwugu.snowleopard.host.AiHost.declaredForTest(core0, selftestModel);
+        core0.exposure().pinGroup(selftestModel, "mod:snowleopard:move");
+        var withMove = io.github.piwugu.snowleopard.host.AiHost.declaredForTest(core0, selftestModel);
+        boolean lazy = baseNames.size() == 3 && baseNames.contains("tool_list") && baseNames.contains("tool_help")
+                && baseNames.contains("tool_scope")
+                && withMove.size() == baseNames.size() + 6 && withMove.contains("move");
+        ok("工具声明跟随工作集（默认只有目录三件；取用 move 后 +6）", lazy,
+                "默认=" + baseNames + " · 取用后=" + withMove.size());
+        core0.exposure().clear(selftestModel);
 
         //    (l) 视觉 B 档（v1.12.5）：射线必须**真的沿视线**命中，且转身 180° 后不再命中。
         //        单向断言抓不到"方向反了"（射线往反方向也照样能命中别的方块），所以必须双向。

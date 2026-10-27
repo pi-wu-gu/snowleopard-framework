@@ -19,27 +19,50 @@ public final class EntityToolsProvider extends ToolGroupProvider.Simple {
     private final String category;
     private final String summary;
     private final List<ToolRegistry.Tool> tools;
+    /** 三段模板生成的详解（功能 + 完整目录 + 使用要点）。 */
+    private final String details;
 
-    public EntityToolsProvider(String group, String category, String summary,
+    public EntityToolsProvider(String group, String category, String summary, String notes,
                                List<ToolRegistry.Tool> tools) {
         super(Version.CORE_API, "snowleopard");
         this.group = group;
         this.category = category;
         this.summary = summary;
         this.tools = tools == null ? List.of() : List.copyOf(tools);
+        this.details = renderDetails(summary, notes, this.tools);
+    }
+
+    /**
+     * 组详解 = 三段模板（功能 / 目录 / 使用要点），**目录从工具清单直接渲染**（2026-10-27）。
+     *
+     * <p>为什么不手写：目录缺一条，模型就拼不出那个可调用路径（知道"这组管移动"却猜 `goto` 还是
+     * `navigate`），逐级查询等于白查；从清单渲染则永远完整、也不会随清单漂移。
+     * 旧版这里是一句占位串（"详情随里程碑逐步充实"），等于让模型拿不到路径。
+     */
+    private static String renderDetails(String summary, String notes, List<ToolRegistry.Tool> tools) {
+        StringBuilder b = new StringBuilder();
+        b.append("功能：").append(summary == null ? "" : summary).append('\n');
+        b.append("目录：\n");
+        for (ToolRegistry.Tool t : tools) {
+            b.append("- ").append(t.name()).append(" — ")
+                    .append(t.hasSummary() ? t.summary() : "（无简介）").append('\n');
+        }
+        if (notes != null && !notes.isBlank()) {
+            b.append("使用要点：").append(notes.strip());
+        }
+        return b.toString();
     }
 
     @Override
     public ToolGroupProvider.Descriptor describe() {
-        return new ToolGroupProvider.Descriptor(group, category, summary,
-                "实体控制工具组（雪豹框架 entitytools）——详情随里程碑逐步充实。",
+        return new ToolGroupProvider.Descriptor(group, category, summary, details,
                 ToolRegistry.Availability.NORMAL, tools);
     }
 
     /**
      * 工具组提供者清单（M1 起的冻结组名；vision 组 v1.12.9 才真正挂上）。
      *
-     * <p>**2026-10-27 13:25 (UTC+8) 踩过**：{@code ToolSchemas.VISION_TOOLS} 从 v1.12.5 起就定义好了，
+     * <p>**2026-10-27 13:25 (UTC+8) 踩过**：{@code "图片工具异步：受理即返回编号，画面下一轮注入；无客户端或区块未加载时改用 vision_scan 并说明这是推断", ToolSchemas.VISION_TOOLS} 从 v1.12.5 起就定义好了，
      * 但这里一直没把它挂进任何组 → 三个视觉工具**从未进入 LLM 工具清单**。
      * 验收脚本直接按注册名 {@code dispatch("vision","shot")} 派发，绕过了"模型能不能看见"这一层，
      * 于是 30 条断言全绿、模型却根本不知道有视觉这回事（用户实测："模型似乎并不知道如何使用视觉"）。
@@ -55,24 +78,24 @@ public final class EntityToolsProvider extends ToolGroupProvider.Simple {
         // 顺序不影响功能，只影响"模型记不记得有这么个东西"，所以重要的放前面。
         if (withVision) {
             groups.add(new EntityToolsProvider(GroupNames.VISION, "vision",
-                    "视觉：射线扫描 / 申请截图 / 重看已拍图", ToolSchemas.VISION_TOOLS));
+                    "视觉：射线扫描 / 申请截图 / 重看已拍图", "图片工具异步：受理即返回编号，画面下一轮注入；无客户端或区块未加载时改用 vision_scan 并说明这是推断", ToolSchemas.VISION_TOOLS));
         }
         groups.addAll(List.of(
                 new EntityToolsProvider(GroupNames.SENSE, "entity/sense",
-                        "感官开关与候选选取", ToolSchemas.SENSE_TOOLS),
+                        "感官开关与候选选取", "open 返回候选三件套；close 解绑并禁用控制类工具", ToolSchemas.SENSE_TOOLS),
                 new EntityToolsProvider(GroupNames.ENTITY, "entity/life",
-                        "实体-模型绑定生命周期", ToolSchemas.ENTITY_TOOLS),
+                        "实体-模型绑定生命周期", "绑定 1:1；未选中的候选进入休眠", ToolSchemas.ENTITY_TOOLS),
                 new EntityToolsProvider(GroupNames.ENTITY_SELF, "entity/self",
-                        "自我状态观测", ToolSchemas.SELF_TOOLS),
-                new EntityToolsProvider(GroupNames.MOVE, "move", "移动（三驱动/寻路/阻塞判定）", ToolSchemas.MOVE_TOOLS),
-                new EntityToolsProvider(GroupNames.VIEW, "view", "视角朝向与锁定", ToolSchemas.VIEW_TOOLS),
-                new EntityToolsProvider(GroupNames.INTERACT, "interact", "交互（攻击/使用/放置/破坏）", ToolSchemas.INTERACT_TOOLS),
-                new EntityToolsProvider(GroupNames.ITEM, "item", "物品（双索引检索/容器/移动）", ToolSchemas.ITEM_TOOLS),
-                new EntityToolsProvider(GroupNames.WORLD, "world", "世界区域查询（单一工具）", ToolSchemas.WORLD_TOOLS),
-                new EntityToolsProvider(GroupNames.WATCH, "watch", "动态感知（含绑定实体，带控制模型编号）", ToolSchemas.WATCH_TOOLS),
-                new EntityToolsProvider(GroupNames.CHAT, "chat", "聊天：注入未读 / 发言 / 检索（M12）", ToolSchemas.CHAT_TOOLS),
-                new EntityToolsProvider(GroupNames.AVATAR, "avatar", "载体：绑定 / 定时唤醒（M13）", ToolSchemas.AVATAR_TOOLS),
-                new EntityToolsProvider(GroupNames.CRAFT, "craft", "合成：配方发现 + 直合成（H4.6）", ToolSchemas.CRAFT_TOOLS)));
+                        "自我状态观测", "只读自身状态，不改世界", ToolSchemas.SELF_TOOLS),
+                new EntityToolsProvider(GroupNames.MOVE, "move", "移动（三驱动/寻路/阻塞判定）", "三驱动互斥；DONE=连续 2 tick 贴住目标；阻塞=单 tick 水平位移 <0.02 连续 12 tick", ToolSchemas.MOVE_TOOLS),
+                new EntityToolsProvider(GroupNames.VIEW, "view", "视角朝向与锁定", "lock 期间跳过自动转向；未命中目标要如实报原因", ToolSchemas.VIEW_TOOLS),
+                new EntityToolsProvider(GroupNames.INTERACT, "interact", "交互（攻击/使用/放置/破坏）", "动作前自动转向（mc.auto_face）；破坏/放置受权限与不可逆约束", ToolSchemas.INTERACT_TOOLS),
+                new EntityToolsProvider(GroupNames.ITEM, "item", "物品（双索引检索/容器/移动）", "pickup 触达 2.5 格才收；pickup_auto 跳过自己丢出的物品（防自丢环）", ToolSchemas.ITEM_TOOLS),
+                new EntityToolsProvider(GroupNames.WORLD, "world", "世界区域查询（单一工具）", "区域查询，单工具组，无需逐级", ToolSchemas.WORLD_TOOLS),
+                new EntityToolsProvider(GroupNames.WATCH, "watch", "动态感知（含绑定实体，带控制模型编号）", "绑定实体后事件带控制模型编号；列表有条数上限", ToolSchemas.WATCH_TOOLS),
+                new EntityToolsProvider(GroupNames.CHAT, "chat", "聊天：注入未读 / 发言 / 检索（M12）", "注入只认玩家；被提及按名称唤醒；send 最小间隔 0.5s", ToolSchemas.CHAT_TOOLS),
+                new EntityToolsProvider(GroupNames.AVATAR, "avatar", "载体：绑定 / 定时唤醒（M13）", "排程权威=shared/avatars.json；主载体唯一且禁重名", ToolSchemas.AVATAR_TOOLS),
+                new EntityToolsProvider(GroupNames.CRAFT, "craft", "合成：配方发现 + 直合成（H4.6）", "配方检索兼容任意模组；craft 只从随身背包扣料，材料不足报缺口", ToolSchemas.CRAFT_TOOLS)));
         return groups;
     }
 

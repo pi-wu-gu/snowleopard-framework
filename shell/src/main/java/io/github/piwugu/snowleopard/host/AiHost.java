@@ -79,10 +79,24 @@ public final class AiHost {
         return client != null;
     }
 
-    /** 自检用：给一句话，返回本轮的工具组顺序（验证"相关组排最前"真的生效，而不是只写在注释里）。 */
-    public static List<String> routedGroupsForTest(String userText) {
-        SnowLeopard core = SnowLeopardMod.core();
-        return core == null ? List.of() : routeOrder(core, userText);
+    /**
+     * 自检用：当前工作集下**会声明给模型**的工具暴露名（不外发，只给断言看）。
+     *
+     * <p>这条是"逐级取用真的生效"的唯一对外缝：默认应只有目录组三件，
+     * `tool_help`/`tool_scope` 取用某个组之后才多出那组的工具——没有这条缝，
+     * "工作集写好了但声明没跟着变"只能等模型碰巧去调才暴露。
+     */
+    public static List<String> declaredForTest(SnowLeopard core, String model) {
+        if (core == null) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (Map<String, Object> s : toolSchemas(core, model)) {
+            if (s.get("function") instanceof Map<?, ?> fn) {
+                out.add(String.valueOf(fn.get("name")));
+            }
+        }
+        return out;
     }
 
     /**
@@ -331,13 +345,12 @@ public final class AiHost {
                     model, prevLevel, cap.level());
         }
 
-        // **工具分组要真的用上**（2026-10-27 13:55 (UTC+8)）：79 个工具平铺时，模型对清单**末尾**的
-        // 工具视而不见（实测 vision 在末位 → deepseek-flash 一次都没调；移到最前 → 稳定命中）。
-        // 所以按本轮话题把"对症的组"提到最前：不改能力、只改顺序，顺带让提示词能点名"本轮相关组"。
-        List<String> groupOrder = routeOrder(core, user.toString());
+        // **工作集按会话重置**（2026-10-27）：会话边界由宿主定义，core 不猜；
+        // 不清就让上一轮任务的组一直挂在清单里（长尾拖住下一轮，还会把声明越堆越多）
+        core.exposure().clear(model);
 
         List<Map<String, Object>> messages = new ArrayList<>();
-        messages.add(Map.of("role", "system", "content", systemPrompt(model, groupOrder)));
+        messages.add(Map.of("role", "system", "content", systemPrompt(core, model)));
         messages.addAll(store.window(model, historyWindow));
         Map<String, Object> userMsg = Map.of("role", "user", "content", user.toString());
         messages.add(userMsg);
@@ -347,11 +360,15 @@ public final class AiHost {
         injectVision(model, messages);
 
         // ② 工具循环
-        List<Map<String, Object>> tools = toolSchemas(core, groupOrder);
-        SnowLeopardMod.LOG.info("[雪豹框架][host] 本轮工具组顺序前四 {}（共 {} 工具）",
-                groupOrder.subList(0, Math.min(4, groupOrder.size())), tools.size());
+        // **每轮重算声明**（2026-10-27）：tool_help 会在上一轮把新组加入工作集，
+        // 只在会话开始时算一次 = 解锁无效（"查了却调不了"，且不报错）
         String finalText = "";
         for (int round = 1; round <= maxRounds; round++) {
+            List<Map<String, Object>> tools = toolSchemas(core, model);
+            if (round == 1) {
+                SnowLeopardMod.LOG.info("[雪豹框架][host] 本轮声明 {} 个工具（工作集 {}，共 {} 组可用）",
+                        tools.size(), core.exposure().signature(model), core.registry().groups().size());
+            }
             // 带图请求只在多模态提供商之间转移（能力守卫在 LlmClient 里，这里只负责判定）
             Map<String, Object> assistant = client.chat(model, messages, tools, hasImagePart(messages));
             store.append(model, assistant);
@@ -416,12 +433,35 @@ public final class AiHost {
             return "Error: 工具参数不是合法 JSON: " + e.getMessage();
         }
         Result r = dispatchOnServer(model, entry.group(), tool.name(), params);
-        return switch (r) {
+        String out = switch (r) {
             case Result.Ok o -> "Ok: " + o.data();
             case Result.Warn w -> "Warn: " + w.data() + "（" + w.desc() + "）";
             case Result.Severe s -> "Severe: " + s.data() + "（" + s.desc() + "）";
             case Result.Error e -> "Error: " + e.desc();
         };
+        // **未取用却调用了**：照常执行（不假装能力不存在），但提示一句——
+        // 否则下一轮它又不在清单里，模型会以为自己记错了（"能执行"与"可见"是两件事）
+        String groupFull = groupFullOf(core, entry.group());
+        if (groupFull != null) {
+            if (!core.exposure().isActive(model, groupFull)) {
+                out += "\n（该工具所属组 " + groupFull + " 还没加入工具表——需要的话 tool_scope add "
+                        + entry.group() + "）";
+            } else if (core.registry().isSolo(groupFull)
+                    && core.exposure().markSoloNotified(model, groupFull + "." + tool.name())) {
+                out += "\n（无组工具：它不隶属任何组，签名已直接给出，无需 tool_help）";
+            }
+        }
+        return out;
+    }
+
+    /** 组短名 → 组全名（执行面拿到的只有短名，提示语要能给出可用的名字）。 */
+    private static String groupFullOf(SnowLeopard core, String shortG) {
+        for (ToolRegistry.Group g : core.registry().groups()) {
+            if (shortGroup(g.full()).equals(shortG)) {
+                return g.full();
+            }
+        }
+        return null;
     }
 
     /** 工具名 → (组短名, 工具)。重名工具跳过后者（清单构建时记 WARN）。 */
@@ -503,75 +543,31 @@ public final class AiHost {
     }
 
     /**
-     * 组名 → 触发词（命中就把该组提到清单**最前**）。
+     * OpenAI 工具清单：**只声明工作集里的工具**（2026-10-27 起）。
      *
-     * <p>**只排序、不裁剪**：裁掉就等于真没了（模型调不了看不见的工具），
-     * 而"把对症的组排前面"既能治"末尾被无视"，又不会让任何能力消失。
-     * 依据是 2026-10-27 的实测：同样 78 个工具，vision 在末位时 deepseek-flash 一次都没调，
-     * 移到最前后才稳定命中——**模型对长清单末尾的工具确实视而不见**。
+     * <p>与 v1.12.10 的"全量声明 + 排序"不同：排序治的是"排在末尾被无视"，
+     * 而工作集外**根本不在清单里**——`tool_help` 查过的组下一轮才出现（解锁可回），
+     * 这样既省 token（79 个全量 ≈ 7–9K token/轮），也让"该用哪个"不再靠位置暗示。
+     *
+     * <p>元工具组（目录）恒在：它是拿回别的组唯一入口，裁掉就是死锁（见 core 的 ToolExposure）。
      */
-    private static final Map<String, String[]> GROUP_HINTS = new java.util.LinkedHashMap<>();
-
-    static {
-        GROUP_HINTS.put("vision", new String[]{"看", "颜色", "长什么样", "长啥样", "外观", "画面", "截图", "视野", "识别", "什么样"});
-        GROUP_HINTS.put("world", new String[]{"周围", "附近", "方圆", "地形", "区块", "那边", "什么方块"});
-        GROUP_HINTS.put("watch", new String[]{"谁在", "盯着", "怪物", "有怪", "动静", "实体"});
-        GROUP_HINTS.put("move", new String[]{"走", "去", "过来", "跟着", "靠近", "离开", "移动", "到这里", "跑"});
-        GROUP_HINTS.put("interact", new String[]{"挖", "破坏", "放", "打", "攻击", "用", "吃", "砍"});
-        GROUP_HINTS.put("item", new String[]{"背包", "物品", "捡", "拾取", "丢", "箱子", "容器", "东西"});
-        GROUP_HINTS.put("craft", new String[]{"合成", "做一", "配方", "材料"});
-        GROUP_HINTS.put("avatar", new String[]{"绑定", "唤醒", "载体"});
-    }
-
-    /**
-     * 本轮清单的组顺序：**vision 常驻最前**，随后是命中的组（按触发顺序），其余按注册顺序。
-     */
-    private static List<String> routeOrder(SnowLeopard core, String userText) {
-        List<String> all = new ArrayList<>();
-        for (ToolRegistry.Group g : core.registry().groups()) {
-            all.add(shortGroup(g.full()));
-        }
-        List<String> order = new ArrayList<>();
-        if (capability.canSeeImages() || capability.level() == VisionCapability.Level.L1) {
-            order.add("vision");       // 视觉常驻最前；未启用时该组根本没注册，all 里也没有
-        }
-        String text = userText == null ? "" : userText;
-        for (Map.Entry<String, String[]> e : GROUP_HINTS.entrySet()) {
-            if (order.contains(e.getKey())) {
-                continue;
-            }
-            for (String w : e.getValue()) {
-                if (text.contains(w)) {
-                    order.add(e.getKey());
-                    break;
-                }
-            }
-        }
-        for (String g : all) {
-            if (!order.contains(g)) {
-                order.add(g);
-            }
-        }
-        return order;
-    }
-
-    /** OpenAI 工具清单（按 {@code order} 的组顺序输出；params 的扁平"参数名→说明"形状转成 JSON Schema）。 */
-    private static List<Map<String, Object>> toolSchemas(SnowLeopard core, List<String> order) {
+    private static List<Map<String, Object>> toolSchemas(SnowLeopard core, String model) {
         buildToolIndex(core);
         List<Map<String, Object>> out = new ArrayList<>();
-        for (String shortG : order) {
-            for (ToolRegistry.Group g : core.registry().groups()) {
-                if (!shortGroup(g.full()).equals(shortG)) {
-                    continue;
+        for (ToolRegistry.Group g : core.registry().groups()) {
+            if (!core.exposure().isActive(model, g.full())) {
+                continue;
+            }
+            String shortG = shortGroup(g.full());
+            for (ToolRegistry.Tool t : g.tools()) {
+                if (!core.exposure().allows(model, g.full(), t.name())) {
+                    continue;   // 组内筛选：只取了一个工具，其余不给签名
                 }
-                for (ToolRegistry.Tool t : g.tools()) {
-                    String exposed = exposedName(shortG, t.name());
-                    Entry e = TOOLS.get(exposed);
-                    if (e != null) {
-                        out.add(toSchema(exposed, e));
-                    }
+                String exposed = exposedName(shortG, t.name());
+                Entry e = TOOLS.get(exposed);
+                if (e != null) {
+                    out.add(toSchema(exposed, e));
                 }
-                break;
             }
         }
         return out;
@@ -645,7 +641,7 @@ public final class AiHost {
 
     // ------------------------------------------------------------- 上下文
 
-    private static String systemPrompt(String model, List<String> groupOrder) {
+    private static String systemPrompt(SnowLeopard core, String model) {
         StringBuilder b = new StringBuilder();
         b.append("你是运行在 Minecraft 服务器里的自主模型。你的模型编号是 ").append(model);
         String name = ChatRuntime.displayName(model);
@@ -674,14 +670,9 @@ public final class AiHost {
         // 视觉能力（L0–L3 单点计算的唯一来源）——**会话开头就定调**，
         // 免得模型先入为主地以为"我能看到"（假成功家族）
         b.append(capability.promptLine());
-        // **让"分组"对模型可见**（2026-10-27 13:55 (UTC+8)）：工具不是一堆无序函数，而是按组组织的；
-        // 提示词点名本轮排在最前的几组，模型才知道"这个能力属于哪一组、去哪找"。
-        // 只列前 4 组（短句），多了反而变成噪音。
-        if (groupOrder != null && !groupOrder.isEmpty()) {
-            b.append("- 工具按组组织，本轮与当前话题最相关的组排在最前：")
-                    .append(String.join(" / ", groupOrder.subList(0, Math.min(4, groupOrder.size()))))
-                    .append("（其余组仍在清单里，需要时直接用）。\n");
-        }
+        // **工具清单由 core 生成**（2026-10-27）：分组用法 + 按来源分节的组清单 + 无组工具。
+        // 组内工具一个都不列——这是"逐级查询"的前提；文案住 core，多宿主共用，避免各写一版漂移。
+        b.append(core.registry().injectionBlock());
         return b.toString();
     }
 
