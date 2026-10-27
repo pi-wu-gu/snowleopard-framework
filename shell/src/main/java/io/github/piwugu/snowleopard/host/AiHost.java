@@ -345,9 +345,11 @@ public final class AiHost {
                     model, prevLevel, cap.level());
         }
 
-        // **工作集按会话重置**（2026-10-27）：会话边界由宿主定义，core 不猜；
-        // 不清就让上一轮任务的组一直挂在清单里（长尾拖住下一轮，还会把声明越堆越多）
-        core.exposure().clear(model);
+        // **工作集跨会话保留**（2026-10-27 16:30 (UTC+8) 改）：
+        // 原先每次会话 clear，本意是不拖长尾，实测却变成"每轮都要重新取用"——
+        // 三次真机会话里两次模型直接调未声明工具（靠 history 里的名字 + 执行面全量派发兜住）。
+        // 一旦将来收紧"未声明即拒绝"，这些调用会全失败。所以改成按 caller 持久，
+        // 只提供显式 tool_scope remove（core 的 clear() 仍保留给测试与会话重置用）。
 
         List<Map<String, Object>> messages = new ArrayList<>();
         messages.add(Map.of("role", "system", "content", systemPrompt(core, model)));
@@ -363,6 +365,7 @@ public final class AiHost {
         // **每轮重算声明**（2026-10-27）：tool_help 会在上一轮把新组加入工作集，
         // 只在会话开始时算一次 = 解锁无效（"查了却调不了"，且不报错）
         String finalText = "";
+        int dsmlRetries = 0;
         for (int round = 1; round <= maxRounds; round++) {
             List<Map<String, Object>> tools = toolSchemas(core, model);
             if (round == 1) {
@@ -376,7 +379,25 @@ public final class AiHost {
             rec.model(LlmClient.textOf(assistant.get("content")));
             Object calls = assistant.get("tool_calls");
             if (!(calls instanceof List<?> callList) || callList.isEmpty()) {
-                finalText = LlmClient.textOf(assistant.get("content"));
+                String text = LlmClient.textOf(assistant.get("content"));
+                // **伪造工具调用的检测**（2026-10-27 16:30 (UTC+8)）：模型在工具不可用/失败时
+                // 会把调用写成正文（`<|CALL_START|>function chat_send {...}`）。宿主若当正常回答，
+                // 玩家什么也收不到、日志里却"跑完了"——这是"假成功"家族里最难查的一种。
+                if (looksLikeFakeToolCall(text)) {
+                    if (dsmlRetries < 1) {
+                        dsmlRetries++;
+                        SnowLeopardMod.LOG.warn("[雪豹框架][host] 模型把工具调用写成了正文（未执行），已提示纠正: {}",
+                                brief(text));
+                        messages.add(Map.of("role", "user", "content",
+                                "（系统）你上一条输出是**工具调用的文本**，宿主没有执行它。"
+                                        + "要调用工具就发真正的工具调用；要说话就直接给纯文本。"));
+                        continue;
+                    }
+                    SnowLeopardMod.LOG.warn("[雪豹框架][host] 纠正后仍出现伪造调用文本，放弃本轮: {}", brief(text));
+                    rec.note("模型输出伪造的工具调用文本（未执行）");
+                    text = "（模型输出为工具调用文本，未执行）";
+                }
+                finalText = text;
                 break;
             }
             for (Object o : callList) {
@@ -452,6 +473,28 @@ public final class AiHost {
             }
         }
         return out;
+    }
+
+    /**
+     * 这段文本像不像"把工具调用写成了正文"（DSML 标记）。
+     *
+     * <p>判据只认标记，不猜语义：出现 `<|CALL_START|>` / `<|CALL_END|>` 一律按假调用处理。
+     * 判据太宽会把正常讨论误杀（模型可能正经引用这个标记），所以这里只盯"调用开始/结束"两个锚点。
+     */
+    public static boolean looksLikeFakeToolCall(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        return text.contains("<|CALL_START|>") || text.contains("<|CALL_END|>");
+    }
+
+    /** 日志用短摘要（避免把一个几百字的伪造调用整段刷进日志）。 */
+    private static String brief(String text) {
+        if (text == null) {
+            return "";
+        }
+        String one = text.replace('\n', ' ').strip();
+        return one.length() <= 120 ? one : one.substring(0, 120) + "…";
     }
 
     /** 组短名 → 组全名（执行面拿到的只有短名，提示语要能给出可用的名字）。 */

@@ -56,8 +56,13 @@ public final class ChatRuntime {
 
     /** 会话（注入块）默认取多少条。 */
     private static final int DEFAULT_PULL_LIMIT = 20;
-    /** 单条发言上限（与 {@code ChatPush} 的 256 对齐）。 */
-    private static final int MAX_SEND_CHARS = 256;
+    /**
+     * 单条发言上限（2026-10-27 16:30 (UTC+8)：256 → 512）。
+     *
+     * <p>实测 250–290 字符的中文汇报会被 256 卡掉，模型于是改用"把工具调用写成正文"绕过，
+     * 反而制造了假调用。**长度限制不该成为逼模型造假的压力源**——玩家读长一点远好过它编。
+     */
+    private static final int MAX_SEND_CHARS = 512;
 
     private static final Map<String, Long> LAST_SEND_AT = new ConcurrentHashMap<>();
     private static final Object WINDOW_LOCK = new Object();
@@ -249,7 +254,7 @@ public final class ChatRuntime {
             throw new IllegalArgumentException("chat_send 需要非空 text");
         }
         if (text.codePointCount(0, text.length()) > MAX_SEND_CHARS) {
-            throw new IllegalArgumentException("单条发言超过 " + MAX_SEND_CHARS + " 字符（拆成几条再说）");
+            throw new IllegalArgumentException("单条发言超过 " + MAX_SEND_CHARS + " 字符（拆成几条再说，每条 ≤512）");
         }
         long waitMs = throttle(model);
         if (waitMs > 0) {

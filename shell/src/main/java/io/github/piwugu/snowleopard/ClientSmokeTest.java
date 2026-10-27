@@ -458,6 +458,15 @@ final class ClientSmokeTest {
                 "默认=" + baseNames + " · 取用后=" + withMove.size());
         core0.exposure().clear(selftestModel);
 
+        //    (k5) 伪造工具调用的判据（v1.13.1）：模型在工具失败/不可用时会输出
+        //        `<|CALL_START|>function chat_send {...}<|CALL_END|>` 当正文（16:22 真机实证）。
+        //        这条断言"判据真的认得出标记"，否则 host 会把它当正常回答（玩家什么也收不到）。
+        boolean dsml = io.github.piwugu.snowleopard.host.AiHost
+                .looksLikeFakeToolCall("<|CALL_START|>function chat_send {\"text\":\"x\"}<|CALL_END|>")
+                && io.github.piwugu.snowleopard.host.AiHost.looksLikeFakeToolCall("<|CALL_START|>function")
+                && !io.github.piwugu.snowleopard.host.AiHost.looksLikeFakeToolCall("这是一段正常回答，提到 tool_help 不算");
+        ok("伪造工具调用可识别（DSML 标记 → 不当正常回答）", dsml, "判据失效");
+
         //    (l) 视觉 B 档（v1.12.5）：射线必须**真的沿视线**命中，且转身 180° 后不再命中。
         //        单向断言抓不到"方向反了"（射线往反方向也照样能命中别的方块），所以必须双向。
         var eye = avatar.getEyePosition(1.0f);
