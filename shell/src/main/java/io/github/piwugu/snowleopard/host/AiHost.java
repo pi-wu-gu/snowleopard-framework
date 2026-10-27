@@ -751,6 +751,16 @@ public final class AiHost {
             messages.add(visionMessage(r, canSee));
             SnowLeopardMod.LOG.info("[雪豹框架][视觉] 注入 {} → {}（canSee={}）",
                     r.reqId(), r.file(), canSee);
+            // **图不进 history，但要留一行文本凭据**（2026-10-27 16:55 (UTC+8) 真机实证）：
+            // 只留 `note=已排队` 的话，模型复盘时无法自证"我确实收过图"，
+            // 于是会把自己上一轮**看过并答对**的画面判成"我编的"并撤回。
+            // 这里只写一行字（不含 base64，history 不会爆），复盘时一眼能查到。
+            String shotName = r.file() == null ? r.reqId()
+                    : java.nio.file.Path.of(r.file()).getFileName().toString();
+            store.append(model, Map.of("role", "user", "content",
+                    "（历史记录）截图 " + shotName + " 的画面已注入给你；"
+                            + "图像数据不落盘（history 只留这一行），要再看用 vision_show。"));
+
         }
     }
 

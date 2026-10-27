@@ -525,7 +525,11 @@ public final class EntityToolsModule {
         Map<String, Object> d = new java.util.LinkedHashMap<>();
         d.put("state", "READY");
         d.put("file", file.getFileName().toString());
-        d.put("note", "已排队，下一轮注入");
+        // **回执必须如实**（2026-10-27 16:55 真机踩过）：旧文案"已排队，下一轮注入"会让模型
+        // 以为图马上来，于是当轮直接收束——结果这轮没有注入，它反过来把自己上一轮**看过并答对**的图
+        // 判定为"我编的"。现在把两种可能都说清楚。
+        d.put("note", "已排队：宿主会在**下一轮请求前**注入；若这是本轮最后一次工具调用，"
+                + "画面会顺延到下一次会话开头。别在这轮等图——要立刻作答请用 vision_scan。");
         String cap = ctx.visionStatus();
         if (cap != null) {
             d.put("capability", cap);
@@ -969,6 +973,30 @@ public final class EntityToolsModule {
         }
         var v = self.getDeltaMovement();
         self.setDeltaMovement(vx, v.y, vz);
+        faceMovement(self, vx, vz);
+    }
+
+    /**
+     * **视角指向**（2026-10-27）：移动时把朝向对准实际行进方向。
+     *
+     * <p>为什么改：原来 `move` 只给速度不改朝向——"向左走"是横着平移、`goto` 是侧着滑过去，
+     * 载体镜头（`vision_shot` 取的就是它的视角）对着旁边，模型一边走一边看不到路。
+     * 方向向量来自 {@link MoveMachine}（开始时冻结），这里只负责把 yaw 转过去。
+     *
+     * <p>**视角锁定期间跳过**：锁定是"看着某个目标"，移动不该跟它抢（Friday auto_face 同一条口径）。
+     */
+    private void faceMovement(LivingEntity self, double vx, double vz) {
+        if (lookLock.locked()) {
+            return;
+        }
+        if (Math.abs(vx) < 1e-6 && Math.abs(vz) < 1e-6) {
+            return;
+        }
+        // MC 约定：yaw=0 朝 +z（南），yaw=90 朝 -x（西）→ 前向量 (-sin, cos)
+        float yaw = (float) (Math.atan2(-vx, vz) * 180.0 / Math.PI);
+        self.setYRot(yaw);
+        self.setYHeadRot(yaw);
+        self.setYBodyRot(yaw);
     }
 
     private void primeMove(LivingEntity self) {

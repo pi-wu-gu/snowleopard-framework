@@ -145,7 +145,7 @@ public final class ToolSchemas {
                             "reversible", "false", "state", "changes_world")));
 
     public static final java.util.List<ToolRegistry.Tool> MOVE_TOOLS = java.util.List.of(
-            new ToolRegistry.Tool(MOVE_MOVE, "移动：方向+时长|距离（三驱动之二；方向=开始时朝向冻结）",
+            new ToolRegistry.Tool(MOVE_MOVE, "移动：方向+时长|距离（方向=开始时朝向冻结；**移动时朝向自动对准行进方向**，视角锁定期间不抢）",
                     "move.move(direction, duration_ticks?|distance?) → {mode, direction}",
                     Map.of("type", "object", "required", java.util.List.of("direction"),
                             "direction", "forward|back|left|right（相对开始时朝向）",
@@ -158,7 +158,7 @@ public final class ToolSchemas {
             new ToolRegistry.Tool(MOVE_JUMP, "跳跃（需脚下支撑；完成后可再跳）",
                     "move.jump() → {ok, y}",
                     Map.of("type", "object", "note", "无参数；vy≤0.08 且脚下支撑才起跳")),
-            new ToolRegistry.Tool(MOVE_GOTO, "移动到坐标（引擎物理滑动；DONE=连续 2 tick 贴住）",
+            new ToolRegistry.Tool(MOVE_GOTO, "移动到坐标（引擎物理滑动；DONE=连续 2 tick 贴住；**朝向沿途对准目标方向**）",
                     "move.goto(target, max_ticks?) → {mode, target}；进度查 move.status",
                     Map.of("type", "object", "required", java.util.List.of("target"),
                             "target", "\"x,y,z\"", "max_ticks", "可选超时（缺省 400）",
