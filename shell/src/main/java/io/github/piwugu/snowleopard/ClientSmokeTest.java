@@ -467,6 +467,53 @@ final class ClientSmokeTest {
                 && !io.github.piwugu.snowleopard.host.AiHost.looksLikeFakeToolCall("这是一段正常回答，提到 tool_help 不算");
         ok("伪造工具调用可识别（DSML 标记 → 不当正常回答）", dsml, "判据失效");
 
+        //    (k6) 视线渐进（v1.14.0）：look 不再是"一帧 setRotation"，而是设目标后**眼→头→身体**依次追。
+        //        断言的是观感契约，不是"字段能写进去"：
+        //        ① 第一 tick 瞳孔已经偏了、头还没到（这就是"眼先动"）；
+        //        ② 小角度（40°）只转头不动身体，头到位后瞳孔回中（否则是斜眼）；
+        //        ③ 大角度（120°）头卡在限位后身体才跟，合成视线落到目标。
+        EntityToolsRuntime.dispatch(model, "view", "unlock", Map.of());
+        float gazeBase = avatar.getYRot();
+        EntityToolsRuntime.dispatch(model, "view", "look",
+                Map.of("yaw", (double) gazeBase + 40, "pitch", 0.0));
+        float pupil1 = Math.abs(avatar.pupilX());
+        float head1 = Math.abs(avatar.headYawRel());
+        for (int i = 0; i < 48; i++) {
+            EntityToolsRuntime.module(model).tickViewLock();
+        }
+        float headSmall = avatar.headYawRel();
+        float pupilEnd = Math.abs(avatar.pupilX());
+        boolean eyesFirst = pupil1 > 0.02f && head1 < 30f;
+        boolean smallSettled = Math.abs(headSmall - 40f) < 2.5f && pupilEnd < 0.01f
+                && io.github.piwugu.snowleopard.tools.FacingMath
+                        .deltaDeg(avatar.getYRot(), gazeBase) < 2.0;
+        ok("视线渐进①眼先动②小角度只转头且瞳孔回中", eyesFirst && smallSettled,
+                "pupil1=" + pupil1 + " head1=" + head1 + " headEnd=" + headSmall
+                        + " pupilEnd=" + pupilEnd + " bodyYaw=" + avatar.getYRot()
+                        + " base=" + gazeBase);
+
+        EntityToolsRuntime.dispatch(model, "view", "look",
+                Map.of("yaw", (double) gazeBase + 120, "pitch", 0.0));
+        for (int i = 0; i < 80; i++) {
+            EntityToolsRuntime.module(model).tickViewLock();
+        }
+        double bodyTurned = io.github.piwugu.snowleopard.tools.FacingMath
+                .deltaDeg(avatar.getYRot(), gazeBase);
+        double composed = avatar.getYRot() + avatar.headYawRel();
+        ok("视线渐进③大角度头到限位后身体跟上（合成视线到目标）",
+                bodyTurned > 30 && Math.abs(io.github.piwugu.snowleopard.tools.FacingMath
+                        .deltaDeg(composed, gazeBase + 120)) < 4.0,
+                "bodyTurned=" + bodyTurned + " headRel=" + avatar.headYawRel()
+                        + " composed=" + composed + " target=" + (gazeBase + 120));
+
+        // **恢复体位再解锁**（v1.14.0）：本段把身体真的转过了（120° 目标 → 身体跟到 60°），
+        // 不还原就会改掉后面视觉断言的场景前提——红羊毛是"按当时朝向"临时摆的，
+        // 朝向变了就会摆在别处，表现为"扫描没命中"这种看着像产品坏了的假回归。
+        avatar.setYRot(gazeBase);
+        avatar.setXRot(0f);
+        avatar.setYHeadRot(gazeBase);
+        EntityToolsRuntime.dispatch(model, "view", "unlock", Map.of());
+
         //    (l) 视觉 B 档（v1.12.5）：射线必须**真的沿视线**命中，且转身 180° 后不再命中。
         //        单向断言抓不到"方向反了"（射线往反方向也照样能命中别的方块），所以必须双向。
         var eye = avatar.getEyePosition(1.0f);

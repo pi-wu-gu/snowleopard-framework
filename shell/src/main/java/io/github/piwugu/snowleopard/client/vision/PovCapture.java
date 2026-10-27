@@ -111,6 +111,15 @@ public final class PovCapture {
         VisionPayloads.Request req = pending;
         pending = null;
         NativeImage img = null;
+        // **相机跟随视线**（v1.14.0，方案 A）：相机取的是实体 yRot/xRot（= 身体），而头可以领先
+        // 身体 65°，不补偿就会出现"模型说在看它、照片里是旁边"的自相矛盾。
+        // 这里抓帧前临时把身体角补成"身体+头"，抓完立刻还原（客户端本地字段，不发包）。
+        float savedYaw = target.getYRot();
+        float savedPitch = target.getXRot();
+        if (target instanceof io.github.piwugu.snowleopard.AvatarEntity av) {
+            target.setYRot(savedYaw + av.headYawRel());
+            target.setXRot(net.minecraft.util.Mth.clamp(savedPitch + av.headPitchRel(), -90.0F, 90.0F));
+        }
         try {
             img = Screenshot.takeScreenshot(mc.getMainRenderTarget());
             byte[] png = downscale(img, req.width(), req.height());
@@ -124,6 +133,8 @@ public final class PovCapture {
             if (img != null) {
                 img.close();
             }
+            target.setYRot(savedYaw);        // 先还原朝向，再摘相机
+            target.setXRot(savedPitch);
             target = null;
             mc.setCameraEntity(mc.player);   // **立刻还原**：玩家最多闪一帧
         }

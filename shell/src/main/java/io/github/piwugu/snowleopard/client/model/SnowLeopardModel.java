@@ -24,6 +24,12 @@ import net.minecraft.util.Mth;
  */
 public class SnowLeopardModel extends EntityModel<AvatarEntity> {
 
+    // 客户端插值缓存（服务端 20Hz，客户端更高）——不清零，跨帧保留上一帧的值
+    private float lastHeadYaw;
+    private float lastHeadPitch;
+    private float lastPupilX;
+    private float lastPupilY;
+
     public static final ModelLayerLocation LAYER_LOCATION =
             new ModelLayerLocation(
                     ResourceLocation.fromNamespaceAndPath("snowleopard", "snow_leopard"), "main");
@@ -288,8 +294,18 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
     @Override
     public void setupAnim(AvatarEntity entity, float limbSwing, float limbSwingAmount,
                           float ageInTicks, float netHeadYaw, float headPitch) {
-        this.head.yRot = netHeadYaw * ((float) Math.PI / 180F);
-        this.head.xRot = headPitch * ((float) Math.PI / 180F);
+        // 头朝向（2026-10-27 v1.14.0）：**读服务端同步的视线**，不再用 netHeadYaw。
+        //
+        // 为什么换：netHeadYaw = yHeadRot - yBodyRot，而服务端一直是"整体转身体"，
+        // 这个差值恒为 0 → 头永远正、瞳孔永远居中（"像机器人"的真因）。
+        // 服务端 20Hz 推送，客户端帧率更高 → 必须 rotLerp 插值，否则一格一格地跳。
+        float wantYaw = Mth.rotLerp(0.4F, lastHeadYaw, entity.headYawRel());
+        float wantPitch = Mth.rotLerp(0.4F, lastHeadPitch, entity.headPitchRel());
+        lastHeadYaw = wantYaw;
+        lastHeadPitch = wantPitch;
+        this.head.resetPose();                       // 先回基准再叠加（v1.12.2 的教训）
+        this.head.yRot += wantYaw * ((float) Math.PI / 180F);
+        this.head.xRot += wantPitch * ((float) Math.PI / 180F);
 
         // 对角步态（腿挂在 body 之下，故不做躯干起伏）
         float stride = Mth.cos(limbSwing * 0.6662F) * 1.4F * limbSwingAmount;
@@ -331,13 +347,20 @@ public class SnowLeopardModel extends EntityModel<AvatarEntity> {
         // 必须先 resetPose() 回到 PartPose 基准再加：ModelPart.x/y/z 就是基准位移本身，
         // 直接 x = gazeX 会把 PartPose 的偏移整个抹掉——v1.12.2 真机即如此，
         // 瞳孔掉到眼睛组 pivot（= 头的 pivot 高度），看起来就是"跑到下颚中间"。
-        float gazeX = Mth.clamp(netHeadYaw * 0.008F, -0.2F, 0.2F);
-        float gazeY = Mth.clamp(headPitch * 0.006F, -0.15F, 0.15F);
+        // 瞳孔（v1.14.0）：改成读服务端算好的**像素平移**。
+        //
+        // 「瞳孔是平移不是旋转」——模型里瞳孔是 1×1×1 的方块，改 xRot/yRot 是绕自身中心转几度，
+        // 视觉上等于没动；只有改 x/y（PartPose 位移）才表达"看向某一侧"。
+        // 服务端给的是"头还没覆盖的残余角"映射成的像素（见 AvatarGaze），此处只管插值与写入。
+        float gazeX = Mth.rotLerp(0.4F, lastPupilX, entity.pupilX());
+        float gazeY = Mth.rotLerp(0.4F, lastPupilY, entity.pupilY());
+        lastPupilX = gazeX;
+        lastPupilY = gazeY;
         this.eyePupilLeft.resetPose();
         this.eyePupilLeft.x += gazeX;
         this.eyePupilLeft.y += gazeY;
         this.eyePupilRight.resetPose();
-        this.eyePupilRight.x += gazeX;
+        this.eyePupilRight.x += gazeX;   // 左右同值：MC 玩家模型的规矩，别镜像
         this.eyePupilRight.y += gazeY;
 
         // 下颚：jawOpen 0=闭 1=张，由宿主状态（被打/说话/进食）驱动

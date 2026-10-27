@@ -27,10 +27,37 @@ import net.minecraft.world.level.Level;
  * </ul>
  */
 public class AvatarEntity extends PathfinderMob
-        implements io.github.piwugu.snowleopard.tools.PickupCarrier {
+        implements io.github.piwugu.snowleopard.tools.PickupCarrier,
+        io.github.piwugu.snowleopard.tools.GazeCarrier {
 
     /** 绑定的模型编号（镜像；权威在 AvatarStore）。 */
     private String boundModel = "";
+
+    // ── 视线表现量（v1.14.0，2026-10-27 18:35 (UTC+8)）──
+    //
+    // 头/瞳孔是**纯客户端表现**，但"看向哪里"由服务端算（服务端有目标坐标、锁定状态、行进方向）。
+    // 所以必须有同步通道：原来本类一个自定义 SynchedEntityData 都没有，服务端算出的角度根本到不了
+    // 客户端——这正是"头永远正、瞳孔永远居中"的另一半原因（前一半是 tickViewLock 直接整体转身体）。
+    //
+    // 只同步**最终值**（头像对 + 瞳孔像素），不同步世界角：客户端不需要知道视线世界角，也不需要复算
+    // 映射函数，避免两边算法各写一份后漂移。
+
+    private static final net.minecraft.network.syncher.EntityDataAccessor<Float> DATA_HEAD_YAW =
+            net.minecraft.network.syncher.SynchedEntityData.defineId(AvatarEntity.class,
+                    net.minecraft.network.syncher.EntityDataSerializers.FLOAT);
+    private static final net.minecraft.network.syncher.EntityDataAccessor<Float> DATA_HEAD_PITCH =
+            net.minecraft.network.syncher.SynchedEntityData.defineId(AvatarEntity.class,
+                    net.minecraft.network.syncher.EntityDataSerializers.FLOAT);
+    private static final net.minecraft.network.syncher.EntityDataAccessor<Float> DATA_PUPIL_X =
+            net.minecraft.network.syncher.SynchedEntityData.defineId(AvatarEntity.class,
+                    net.minecraft.network.syncher.EntityDataSerializers.FLOAT);
+    private static final net.minecraft.network.syncher.EntityDataAccessor<Float> DATA_PUPIL_Y =
+            net.minecraft.network.syncher.SynchedEntityData.defineId(AvatarEntity.class,
+                    net.minecraft.network.syncher.EntityDataSerializers.FLOAT);
+
+    /** 变化阈值：小于它的写入直接丢弃（否则 20Hz 每 tick 发四个包，远处实体更新抖动）。 */
+    private static final float GAZE_SYNC_EPS_DEG = 0.5F;
+    private static final float GAZE_SYNC_EPS_PX = 0.02F;
 
     public AvatarEntity(EntityType<? extends AvatarEntity> type, Level level) {
         super(type, level);
@@ -58,6 +85,56 @@ public class AvatarEntity extends PathfinderMob
     @Override
     public boolean removeWhenFarAway(double distance) {
         return false;   // 载体不允许远距消失（绑定会凭空没掉）
+    }
+
+    @Override
+    protected void defineSynchedData(net.minecraft.network.syncher.SynchedEntityData.Builder builder) {
+        super.defineSynchedData(builder);
+        builder.define(DATA_HEAD_YAW, 0.0F);
+        builder.define(DATA_HEAD_PITCH, 0.0F);
+        builder.define(DATA_PUPIL_X, 0.0F);
+        builder.define(DATA_PUPIL_Y, 0.0F);
+    }
+
+    /**
+     * 写入视线表现量（服务端每 tick 调；只在变化超过阈值时才真的发包）。
+     *
+     * <p>阈值不是优化洁癖：{@code SynchedEntityData.set} 每次变更都会进脏表并发给跟踪者，
+     * 头每 tick 平滑移动 8°，若每 tick 都发，一个载体就是 4×20=80 包/秒。
+     */
+    @Override
+    public void applyGaze(float headYawRel, float headPitchRel, float pupilX, float pupilY) {
+        setIfChanged(DATA_HEAD_YAW, headYawRel, GAZE_SYNC_EPS_DEG);
+        setIfChanged(DATA_HEAD_PITCH, headPitchRel, GAZE_SYNC_EPS_DEG);
+        setIfChanged(DATA_PUPIL_X, pupilX, GAZE_SYNC_EPS_PX);
+        setIfChanged(DATA_PUPIL_Y, pupilY, GAZE_SYNC_EPS_PX);
+    }
+
+    private void setIfChanged(net.minecraft.network.syncher.EntityDataAccessor<Float> key,
+                              float value, float eps) {
+        if (Math.abs(this.entityData.get(key) - value) >= eps) {
+            this.entityData.set(key, value);
+        }
+    }
+
+    @Override
+    public float headYawRel() {
+        return this.entityData.get(DATA_HEAD_YAW);
+    }
+
+    @Override
+    public float headPitchRel() {
+        return this.entityData.get(DATA_HEAD_PITCH);
+    }
+
+    @Override
+    public float pupilX() {
+        return this.entityData.get(DATA_PUPIL_X);
+    }
+
+    @Override
+    public float pupilY() {
+        return this.entityData.get(DATA_PUPIL_Y);
     }
 
     public String boundModel() {

@@ -119,6 +119,19 @@ public final class SelfTestScenario {
     }
 
     /** M2：look 一致性 + 六条结束路径。z2 为绑定实体（M1 死亡流后重新开感官选取，从 M1 房搬入）。 */
+    /**
+     * 把渐进朝向推到稳定（v1.14.0）。
+     *
+     * <p>为什么自检需要它：`look` / `look_at` 不再一帧到位（眼先动 → 头后追 → 身体超限才转），
+     * 而断言问的是"最终朝向对不对"。不推进就直接查，会拿到中间值——那不是回归，是**断言的意图变了**：
+     * 从"设了就是"变成"最终会到"。48 tick 足够把 180° 走完（头 8°/tick）。
+     */
+    private static void settleGaze(String model) {
+        for (int i = 0; i < 48; i++) {
+            EntityToolsRuntime.module(model).tickViewLock();
+        }
+    }
+
     private static boolean runM2(ServerLevel level, BlockPos base, Zombie z2, String ref2) {
         boolean ok = true;
         String model = "selftest-m2";
@@ -132,6 +145,7 @@ public final class SelfTestScenario {
 
         // look 一致性
         Result look = EntityToolsRuntime.dispatch(model, "view", "look", Map.of("yaw", 90.0, "pitch", 10.0));
+        settleGaze(model);   // look 现在是"设目标 + 渐进转"，断言问的是最终朝向
         Result ls = EntityToolsRuntime.dispatch(model, "view", "status", Map.of());
         ok &= step("M2", look instanceof Result.Ok
                         && String.valueOf(data(ls)).contains("yaw=90.0"),
@@ -218,6 +232,7 @@ public final class SelfTestScenario {
         level.addFreshEntity(z5);
         Result la = EntityToolsRuntime.dispatch(model, "view", "look_at",
                 Map.of("target_type", "entity", "target", z5.getUUID().toString()));
+        settleGaze(model);   // 同上：锁定也是渐进转，断言对准的是最终角
         FacingMath.Angle expected = FacingMath.aim(
                 z2.getX(), z2.getY() + z2.getEyeHeight(), z2.getZ(),
                 z5.getX(), z5.getY() + z5.getBbHeight() * 0.5, z5.getZ());
@@ -781,6 +796,7 @@ public final class SelfTestScenario {
                 cp.getX() + 0.5, cp.getY() + 0.5, cp.getZ() + 0.5);
         EntityToolsRuntime.dispatch(model, "view", "look",
                 Map.of("yaw", aim.yaw(), "pitch", aim.pitch()));   // 走产品路径（头/身同步）
+        settleGaze(model);   // 渐进转完再 raycast，否则视线还偏着（v1.14.0）
         Result c3 = EntityToolsRuntime.dispatch(model, "item", "container_items", Map.of());
         ok &= step("M5", String.valueOf(data(c3)).contains("raycast:")
                         && String.valueOf(data(c3)).contains("minecraft:dirt"),

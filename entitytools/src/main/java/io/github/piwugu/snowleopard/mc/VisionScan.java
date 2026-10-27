@@ -41,6 +41,22 @@ final class VisionScan {
     }
 
     /** 参数与射线扫描。返回可直接塞进 {@code Result.ok} 的 Map（不含 base64，图只落盘给路径）。 */
+    /**
+     * 合成视线向量 = 身体朝向 + 头相对角（本类与截图共用同一口径）。
+     *
+     * <p>公式与 {@code Entity.getViewVector} 一致：{@code (-sin yaw·cos pitch, -sin pitch, cos yaw·cos pitch)}。
+     * 没有实现 {@code GazeCarrier} 的实体（普通生物）退回原版向量。
+     */
+    static Vec3 lookVector(net.minecraft.world.entity.Entity self, float partialTick) {
+        if (!(self instanceof io.github.piwugu.snowleopard.tools.GazeCarrier gc)) {
+            return self.getViewVector(partialTick);
+        }
+        double yaw = Math.toRadians(self.getYRot() + gc.headYawRel());
+        double pitch = Math.toRadians(self.getXRot() + gc.headPitchRel());
+        double cosPitch = Math.cos(pitch);
+        return new Vec3(-Math.sin(yaw) * cosPitch, -Math.sin(pitch), Math.cos(yaw) * cosPitch);
+    }
+
     static Map<String, Object> scan(ServerLevel level, Entity self, Map<String, Object> params,
                                     Path imageDir, String capability) {
         double range = clamp(num(params, "range", 32), 4, 64);
@@ -49,7 +65,10 @@ final class VisionScan {
         int h = (int) clamp(num(params, "height", 36), 9, 144);
 
         Vec3 eye = self.getEyePosition(1.0f);
-        Vec3 dir = self.getViewVector(1.0f);
+        // **视线口径与截图一致**（v1.14.0）：身体朝向 + 头相对角。
+        // 只取 getViewVector（= 身体）时，头领先身体后会出现"扫描说正前方是空地、照片里却是墙"——
+        // 两个工具对"前方"的定义不一致，模型会判定工具在骗人。
+        Vec3 dir = lookVector(self, 1.0f);
         Vec3 up0 = new Vec3(0, 1, 0);
         Vec3 right = dir.cross(up0);
         if (right.lengthSqr() < 1.0e-6) {

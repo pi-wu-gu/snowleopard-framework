@@ -75,6 +75,16 @@ public final class EntityToolsModule {
     private final BindingRegistry bindings = new BindingRegistry();
     private final DormancyManager dormancy = new DormancyManager();
     private final LookLockMachine lookLock = new LookLockMachine();
+
+    /** 视线渐进状态机（2026-10-27）：朝向的唯一出口，锁定/移动/显式 look 都经它。 */
+    private final io.github.piwugu.snowleopard.tools.AvatarGaze gaze =
+            new io.github.piwugu.snowleopard.tools.AvatarGaze();
+    /** {@code look} 设定的持续目标（null = 没有）；到期自动失效，不跨会话永久生效。 */
+    private Double explicitYaw;
+    private Double explicitPitch;
+    private int explicitAge;
+    /** {@code look} 目标有效期（tick）= 30s。 */
+    private static final int EXPLICIT_TTL_TICKS = 600;
     private final io.github.piwugu.snowleopard.tools.MiningTask mining =
             new io.github.piwugu.snowleopard.tools.MiningTask();
     private final io.github.piwugu.snowleopard.tools.MoveMachine moveM =
@@ -307,6 +317,9 @@ public final class EntityToolsModule {
             }
         }
         sense.close();
+        explicitYaw = null;
+        explicitPitch = null;
+        gaze.reset(0, 0);   // 解绑后不该保留上一条绑定留下的头/瞳角度
         return Result.ok(Map.of("state", sense.state().name(), "unbound", String.valueOf(prev)));
     }
 
@@ -365,12 +378,22 @@ public final class EntityToolsModule {
         if (!(y instanceof Number yn) || !(p instanceof Number pn)) {
             return Result.error("look 需要数值参数 yaw 与 pitch（度）");
         }
-        float yaw = yn.floatValue();
-        float pitch = pn.floatValue();
-        setRotation(self, yaw, pitch);
-        lastSetYaw = yaw;
-        lastSetPitch = pitch;
-        return Result.ok(Map.of("yaw", (double) yaw, "pitch", (double) pitch));
+        double yaw = yn.doubleValue();
+        double pitch = pn.doubleValue();
+        explicitYaw = yaw;
+        explicitPitch = pitch;
+        explicitAge = 0;
+        tickViewLock();   // 先推一 tick，回执能给出"已经开始转"的实况
+        double need = Math.abs(io.github.piwugu.snowleopard.tools.AvatarGaze.wrap(yaw - self.getYRot()));
+        long ticks = (long) Math.ceil(need / io.github.piwugu.snowleopard.tools.AvatarGaze.HEAD_SLEW) + 2;
+        java.util.Map<String, Object> d = new java.util.LinkedHashMap<>();
+        d.put("yaw", yaw);
+        d.put("pitch", pitch);
+        d.put("bodyYaw", (double) self.getYRot());
+        // **必须如实说"逐步转"**：模型若以为一帧到位，紧接着 vision_shot 会拍到旧方向，
+        // 然后判定"工具在骗我"（这类假成功最难查）。
+        d.put("note", "已设为注视目标；眼先动、头随后、身体超限才转，约 " + ticks + " tick 到位");
+        return Result.ok(d);
     }
 
     /** 锁定视角到方块/实体（可选面、可选时长）。 */
@@ -410,6 +433,12 @@ public final class EntityToolsModule {
     }
 
     Result unlockView() {
+        explicitYaw = null;
+        explicitPitch = null;
+        LivingEntity self = boundLiving(ctx.level());
+        if (self != null) {
+            resetGaze(self);   // 头必须回正（含同步字段），否则扫描/截图口径会停在旧方向
+        }
         return lookLock.unlock();
     }
 
@@ -538,49 +567,136 @@ public final class EntityToolsModule {
     }
 
     /**
-     * 每 tick 锁定执行（壳侧 ServerTickEvent 调；自测同步直调同一方法）。
-     * 六条结束路径的输入（目标存在/距离/漂移）在此读世界事实，状态语义在 {@link LookLockMachine}。
+     * 每 tick 朝向推进（原名 tickViewLock；语义已扩成"**所有朝向来源的唯一出口**"）。
+     *
+     * <p><b>为什么必须只有一个出口</b>：锁定要转身体、移动要转身体、{@code look} 也要转身体。
+     * 三处各写一次 {@code setRotation} 就会互相抢写，表现是头在几个方向之间跳——正是用户点名要防的
+     * "多点切换抽搐"。现在只有这里写朝向，其余入口只声明"我想要哪个来源"。
+     *
+     * <p>三级渐进（眼 → 头 → 身体）与限速/最短弧/驻留都在 {@link io.github.piwugu.snowleopard.tools.AvatarGaze}
+     * 里，本方法只负责读世界事实（目标是否存在/距离/漂移）与选源。
      */
     public void tickViewLock() {
-        if (!lookLock.locked()) {
-            return;
-        }
         ServerLevel level = ctx.level();
-        LivingEntity self = boundLiving(level);
-        if (level == null || self == null) {
+        LivingEntity self = level == null ? null : boundLiving(level);
+        if (self == null) {
             return;
         }
-        boolean targetPresent;
-        double distance;
-        FacingMath.Angle aim;
-        String target = lookLock.target();
-        if (lookLock.kind() == LookLockMachine.Kind.BLOCK) {
-            net.minecraft.core.BlockPos pos = parseBlock(target);
-            targetPresent = !level.getBlockState(pos).isAir();
-            double cx = pos.getX() + 0.5, cy = pos.getY() + 0.5, cz = pos.getZ() + 0.5;
-            double[] faceOff = faceOffset(lockFace);
-            cx += faceOff[0];
-            cy += faceOff[1];
-            cz += faceOff[2];
-            distance = Math.sqrt(self.distanceToSqr(cx, cy, cz));
-            aim = FacingMath.aim(self.getX(), self.getY() + self.getEyeHeight(), self.getZ(), cx, cy, cz);
+
+        // ① 锁定判定（世界事实 → 状态机）；只有"仍锁着"才把 aim 当目标
+        boolean lockedNow = false;
+        double aimYaw = 0;
+        double aimPitch = 0;
+        if (lookLock.locked()) {
+            boolean targetPresent;
+            double distance;
+            FacingMath.Angle aim;
+            String target = lookLock.target();
+            if (lookLock.kind() == LookLockMachine.Kind.BLOCK) {
+                net.minecraft.core.BlockPos pos = parseBlock(target);
+                targetPresent = !level.getBlockState(pos).isAir();
+                double cx = pos.getX() + 0.5, cy = pos.getY() + 0.5, cz = pos.getZ() + 0.5;
+                double[] faceOff = faceOffset(lockFace);
+                cx += faceOff[0];
+                cy += faceOff[1];
+                cz += faceOff[2];
+                distance = Math.sqrt(self.distanceToSqr(cx, cy, cz));
+                aim = FacingMath.aim(self.getX(), self.getY() + self.getEyeHeight(), self.getZ(), cx, cy, cz);
+            } else {
+                Entity e = level.getEntity(java.util.UUID.fromString(target));
+                targetPresent = e != null && e.isAlive();
+                distance = targetPresent ? self.distanceTo(e) : 0;
+                double ex = targetPresent ? e.getX() : 0, ey = targetPresent ? e.getY() + e.getBbHeight() * 0.5 : 0,
+                        ez = targetPresent ? e.getZ() : 0;
+                aim = FacingMath.aim(self.getX(), self.getY() + self.getEyeHeight(), self.getZ(), ex, ey, ez);
+            }
+            // 漂移判据比的是"我们**实际写进去**的朝向"（见 applyPose）。若拿 aim 比，
+            // 身体渐进期间每 tick 都不到 aim → 下一 tick 直接被判"外力夺控"并解锁（不报错的死法）。
+            boolean drifted = FacingMath.deltaDeg(self.getYRot(), lastSetYaw) > LookLockMachine.DRIFT_EPS_DEG
+                    || FacingMath.deltaDeg(self.getXRot(), lastSetPitch) > LookLockMachine.DRIFT_EPS_DEG;
+            Result r = lookLock.tick(targetPresent, distance, drifted);
+            if (r instanceof Result.Ok ok && ok.data() instanceof Map<?, ?> m
+                    && Boolean.TRUE.equals(m.get("locked"))) {
+                lockedNow = true;
+                aimYaw = aim.yaw();
+                aimPitch = aim.pitch();
+            }
+        }
+
+        // ② 目标来源调度：锁定 > 移动收束 > 显式 look > 归零
+        boolean moving = moveM.busy();
+        double moveYaw = moving ? travelYaw(self) : self.getYRot();
+        io.github.piwugu.snowleopard.tools.AvatarGaze.Source want;
+        double targetYaw;
+        double targetPitch;
+        if (lockedNow) {
+            want = io.github.piwugu.snowleopard.tools.AvatarGaze.Source.LOCK;
+            targetYaw = aimYaw;
+            targetPitch = aimPitch;
+        } else if (moving) {
+            want = io.github.piwugu.snowleopard.tools.AvatarGaze.Source.MOVE;
+            targetYaw = moveYaw;
+            targetPitch = self.getXRot();
+        } else if (explicitYaw != null && explicitAge <= EXPLICIT_TTL_TICKS) {
+            want = io.github.piwugu.snowleopard.tools.AvatarGaze.Source.LOOK;
+            targetYaw = explicitYaw;
+            targetPitch = explicitPitch == null ? self.getXRot() : explicitPitch;
         } else {
-            Entity e = level.getEntity(java.util.UUID.fromString(target));
-            targetPresent = e != null && e.isAlive();
-            distance = targetPresent ? self.distanceTo(e) : 0;
-            double ex = targetPresent ? e.getX() : 0, ey = targetPresent ? e.getY() + e.getBbHeight() * 0.5 : 0,
-                    ez = targetPresent ? e.getZ() : 0;
-            aim = FacingMath.aim(self.getX(), self.getY() + self.getEyeHeight(), self.getZ(), ex, ey, ez);
+            want = io.github.piwugu.snowleopard.tools.AvatarGaze.Source.IDLE;
+            targetYaw = self.getYRot();
+            targetPitch = self.getXRot();
         }
-        boolean drifted = FacingMath.deltaDeg(self.getYRot(), lastSetYaw) > LookLockMachine.DRIFT_EPS_DEG
-                || FacingMath.deltaDeg(self.getXRot(), lastSetPitch) > LookLockMachine.DRIFT_EPS_DEG;
-        Result r = lookLock.tick(targetPresent, distance, drifted);
-        if (r instanceof Result.Ok ok && ok.data() instanceof Map<?, ?> m
-                && Boolean.TRUE.equals(m.get("locked"))) {
-            setRotation(self, aim.yaw(), aim.pitch());
-            lastSetYaw = (float) aim.yaw();
-            lastSetPitch = (float) aim.pitch();
+        if (explicitYaw != null && ++explicitAge > EXPLICIT_TTL_TICKS) {
+            explicitYaw = null;     // 过期：不能十分钟后还扭着头看旧方向
+            explicitPitch = null;
         }
+
+        // ③ 三级渐进
+        io.github.piwugu.snowleopard.tools.AvatarGaze.Pose pose = gaze.tick(want, targetYaw, targetPitch,
+                self.getYRot(), self.getXRot(), moving, moveYaw);
+        applyPose(self, pose);
+    }
+
+    /** 把一 tick 的结果落进实体：身体朝向 + 同步给客户端的头像对/瞳孔。 */
+    private void applyPose(LivingEntity self, io.github.piwugu.snowleopard.tools.AvatarGaze.Pose pose) {
+        if (Math.abs(io.github.piwugu.snowleopard.tools.AvatarGaze.wrap(pose.bodyYaw() - self.getYRot())) > 1e-4
+                || Math.abs(pose.bodyPitch() - self.getXRot()) > 1e-4) {
+            self.setYRot((float) pose.bodyYaw());
+            self.setXRot((float) pose.bodyPitch());
+        }
+        lastSetYaw = self.getYRot();
+        lastSetPitch = self.getXRot();
+        if (self instanceof io.github.piwugu.snowleopard.tools.GazeCarrier car) {
+            car.applyGaze((float) pose.headYawRel(), (float) pose.headPitchRel(),
+                    (float) pose.pupilX(), (float) pose.pupilY());
+        }
+    }
+
+    /**
+     * 复位视线（解锁/解绑/换绑时调）。
+     *
+     * <p><b>必须连同步字段一起清</b>（2026-10-27 18:36 真机踩到）：只 reset 内部状态的话，
+     * 实体上还挂着上一 tick 的 {@code headYawRel}，于是"已解锁"但头仍偏着——
+     * 表现是扫描射线比身体偏 60°、模型说"我看不到刚才那张脸"却看不出原因（R4 的实体版）。
+     *
+     * <p>观感仍是平滑的：客户端渲染做 rotLerp 插值，这里立即置 0 只是让**工具口径**立刻一致
+     * （服务端权威值不能停留在旧方向）。
+     */
+    private void resetGaze(LivingEntity self) {
+        gaze.reset(self.getYRot(), self.getXRot());
+        if (self instanceof io.github.piwugu.snowleopard.tools.GazeCarrier car) {
+            car.applyGaze(0f, 0f, 0f, 0f);
+        }
+    }
+
+    /** 行进方向的世界角（GOTO 用目标点，其余用开始时冻结的方向向量）。 */
+    private double travelYaw(LivingEntity self) {
+        if (moveM.mode() == io.github.piwugu.snowleopard.tools.MoveMachine.Mode.GOTO) {
+            double[] t = moveM.target();
+            return Math.toDegrees(Math.atan2(-(t[0] - self.getX()), t[2] - self.getZ()));
+        }
+        double[] dir = moveM.direction();
+        return Math.toDegrees(Math.atan2(-dir[0], dir[1]));
     }
 
     private LivingEntity requireBound() {
@@ -973,31 +1089,9 @@ public final class EntityToolsModule {
         }
         var v = self.getDeltaMovement();
         self.setDeltaMovement(vx, v.y, vz);
-        faceMovement(self, vx, vz);
+        // 朝向不在这里写：统一由 tickViewLock 的视线状态机驱动（否则两处抢写=头抖）
     }
 
-    /**
-     * **视角指向**（2026-10-27）：移动时把朝向对准实际行进方向。
-     *
-     * <p>为什么改：原来 `move` 只给速度不改朝向——"向左走"是横着平移、`goto` 是侧着滑过去，
-     * 载体镜头（`vision_shot` 取的就是它的视角）对着旁边，模型一边走一边看不到路。
-     * 方向向量来自 {@link MoveMachine}（开始时冻结），这里只负责把 yaw 转过去。
-     *
-     * <p>**视角锁定期间跳过**：锁定是"看着某个目标"，移动不该跟它抢（Friday auto_face 同一条口径）。
-     */
-    private void faceMovement(LivingEntity self, double vx, double vz) {
-        if (lookLock.locked()) {
-            return;
-        }
-        if (Math.abs(vx) < 1e-6 && Math.abs(vz) < 1e-6) {
-            return;
-        }
-        // MC 约定：yaw=0 朝 +z（南），yaw=90 朝 -x（西）→ 前向量 (-sin, cos)
-        float yaw = (float) (Math.atan2(-vx, vz) * 180.0 / Math.PI);
-        self.setYRot(yaw);
-        self.setYHeadRot(yaw);
-        self.setYBodyRot(yaw);
-    }
 
     private void primeMove(LivingEntity self) {
         lastMoveX = self.getX();
