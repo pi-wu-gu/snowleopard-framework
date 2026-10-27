@@ -61,15 +61,41 @@ public class CoreItem extends BlockItem {
     }
 
     /**
-     * 潜行右键<b>实体</b>的唯一出口。
+     * 右键<b>实体</b>的出口（P5：绑定核心右键载体 = 经验传输/付费传送）。
      *
-     * <p>MC 1.21.1 命中 ENTITY 时 {@code useOn} 永远不会被调用（{@code startUseItem} 的
-     * ENTITY 分支只走 interactAt→interact→useItem），潜行放置在实体上无处落脚。
-     * 此处给明确提示并 {@code SUCCESS} 消耗，防止落入 {@code use} 的 sneak-pass 静默分支。
+     * <p>MC 1.21.1 命中 ENTITY 时 {@code useOn} 永远不会被调用。
+     * 分流规则：
+     * <ul>
+     *   <li>绑定核心 + 普通右键载体 → 经验传输（玩家 XP → 载体 xp 池）</li>
+     *   <li>绑定核心 + 潜行右键载体 → 付费传送（扣载体经验，叫到玩家身边）</li>
+     *   <li>未绑定核心 + 潜行右键载体 → 放置引导</li>
+     *   <li>未绑定核心 + 普通右键载体 → PASS（落 use() → CoreScreen）</li>
+     * </ul>
      */
     @Override
     public InteractionResult interactLivingEntity(ItemStack stack, Player player,
                                                   LivingEntity target, InteractionHand hand) {
+        if (!(target instanceof io.github.piwugu.snowleopard.AvatarEntity avatar)) {
+            return InteractionResult.PASS;
+        }
+        String home = getHomeNbt(stack);
+
+        // ── 绑定核心 + 载体 → 经验传输 / 付费传送 ──
+        if (!home.isEmpty()) {
+            if (!home.equals(avatar.boundModel())) {
+                if (!player.level().isClientSide) {
+                    player.displayClientMessage(Component.literal(
+                            "§e[受限核心] §c这枚核心绑定的是 " + home + "，不是 " + avatar.boundModel()), true);
+                }
+                return InteractionResult.SUCCESS;
+            }
+            if (player.isShiftKeyDown()) {
+                return handleTeleport(player, avatar);
+            }
+            return handleXpTransfer(player, avatar);
+        }
+
+        // ── 未绑定 + 潜行 → 放置引导 ──
         if (player.isShiftKeyDown()) {
             if (!player.level().isClientSide) {
                 LOGGER.info("[CoreItem] sneak+entity target={} — advising block face",
@@ -79,6 +105,80 @@ public class CoreItem extends BlockItem {
             return InteractionResult.SUCCESS;
         }
         return InteractionResult.PASS;
+    }
+
+    /** P5 经验传输：玩家 XP → 载体 xp 池（每次 10 点）。 */
+    private static InteractionResult handleXpTransfer(Player player,
+                                                       io.github.piwugu.snowleopard.AvatarEntity avatar) {
+        if (player.level().isClientSide) {
+            return InteractionResult.SUCCESS;
+        }
+        int transfer = 10;
+        if (player.totalExperience < transfer) {
+            player.displayClientMessage(Component.literal(
+                    "§e[受限核心] §c经验不足（需要 " + transfer + "，当前 " + player.totalExperience + "）"), true);
+            return InteractionResult.SUCCESS;
+        }
+        int room = avatar.getVitalsXpMax() - avatar.getVitalsXp();
+        int actual = Math.min(transfer, room);
+        if (actual <= 0) {
+            player.displayClientMessage(Component.literal(
+                    "§e[受限核心] §c载体经验已满"), true);
+            return InteractionResult.SUCCESS;
+        }
+        player.giveExperiencePoints(-actual);
+        avatar.addXp(actual);
+        player.displayClientMessage(Component.literal(String.format(
+                "§a[经验传输] 转移 %d 经验 → %s（载体 %d/%d，剩余 %d）",
+                actual, avatar.boundModel(),
+                avatar.getVitalsXp(), avatar.getVitalsXpMax(),
+                player.totalExperience)), true);
+        return InteractionResult.SUCCESS;
+    }
+
+    /** P5 付费传送：扣载体经验，叫到玩家身边（潜行右键）。 */
+    private static InteractionResult handleTeleport(Player player,
+                                                     io.github.piwugu.snowleopard.AvatarEntity avatar) {
+        if (player.level().isClientSide) {
+            return InteractionResult.SUCCESS;
+        }
+        // 校验：同维度
+        if (player.level() != avatar.level()) {
+            player.displayClientMessage(Component.literal("§e[受限核心] §c跨维度无法传送"), true);
+            return InteractionResult.SUCCESS;
+        }
+        // 费用 = ceil(距离 × 每格费率)，封顶
+        double dist = player.distanceTo(avatar);
+        int cost = (int) Math.ceil(dist * avatar.getTpCostPerBlock());
+        cost = Math.min(cost, avatar.getTpCostMax());
+        if (avatar.getVitalsXp() < cost) {
+            player.displayClientMessage(Component.literal(String.format(
+                    "§e[受限核心] §c载体经验不足（需要 %d，当前 %d）",
+                    cost, avatar.getVitalsXp())), true);
+            return InteractionResult.SUCCESS;
+        }
+        // 停动作（传送前先停，防止 goto/挖掘对旧目标继续跑）
+        io.github.piwugu.snowleopard.EntityToolsRuntime.dispatch(
+                avatar.boundModel(), "move", "move_stop", java.util.Map.of());
+        // 落点：玩家脚下一格 + 两格空气
+        var level = (net.minecraft.server.level.ServerLevel) player.level();
+        var feet = player.blockPosition();
+        var landing = feet.offset(0, 1, 0); // 玩家头顶（站人安全位）
+        // 简易落点检查：脚下实心 + 两格空气
+        boolean safe = level.getBlockState(landing.below()).isSolid()
+                && level.getBlockState(landing).isAir()
+                && level.getBlockState(landing.above()).isAir();
+        if (!safe) {
+            player.displayClientMessage(Component.literal("§e[受限核心] §c落点不安全，未扣费"), true);
+            return InteractionResult.SUCCESS;
+        }
+        // 扣费 + 传送
+        avatar.setVitalsXp(avatar.getVitalsXp() - cost);
+        avatar.teleportTo(landing.getX() + 0.5, landing.getY(), landing.getZ() + 0.5);
+        player.displayClientMessage(Component.literal(String.format(
+                "§a[付费传送] %s 已叫到身边（距离 %.1f 格，扣 %d 经验，剩余 %d）",
+                avatar.boundModel(), dist, cost, avatar.getVitalsXp())), true);
+        return InteractionResult.SUCCESS;
     }
 
     @Override

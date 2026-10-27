@@ -46,6 +46,9 @@ public class AvatarEntity extends PathfinderMob
     private int hunger = 20;           // 0-20
     private int hungerDecaySec = 30;   // 每 30 秒 -1
     private long lastHungerDecayMs = System.currentTimeMillis();
+    // P5 付费传送费用（裁决④：属性在实体）
+    private float tpCostPerBlock = 0.5F;  // 每格经验费率
+    private int tpCostMax = 200;           // 单次封顶
 
     // ── 视线表现量（v1.14.0，2026-10-27 18:35 (UTC+8)）──
     //
@@ -188,6 +191,8 @@ public class AvatarEntity extends PathfinderMob
         tag.putInt("VitalsXpPerSecCap", xpPerSecCap);
         tag.putInt("VitalsHunger", hunger);
         tag.putInt("VitalsHungerDecaySec", hungerDecaySec);
+        tag.putFloat("VitalsTpCostPerBlock", tpCostPerBlock);
+        tag.putInt("VitalsTpCostMax", tpCostMax);
     }
 
     @Override
@@ -210,6 +215,8 @@ public class AvatarEntity extends PathfinderMob
         xpPerSecCap = tag.contains("VitalsXpPerSecCap") ? tag.getInt("VitalsXpPerSecCap") : 20;
         hunger = tag.contains("VitalsHunger") ? tag.getInt("VitalsHunger") : 20;
         hungerDecaySec = tag.contains("VitalsHungerDecaySec") ? tag.getInt("VitalsHungerDecaySec") : 30;
+        tpCostPerBlock = tag.contains("VitalsTpCostPerBlock") ? tag.getFloat("VitalsTpCostPerBlock") : 0.5F;
+        tpCostMax = tag.contains("VitalsTpCostMax") ? tag.getInt("VitalsTpCostMax") : 200;
     }
 
     // ── 随身背包（九格，NBT 持久化；经 PackCarrier 接口暴露给物品工具）──
@@ -326,6 +333,10 @@ public class AvatarEntity extends PathfinderMob
     public void setVitalsHunger(int v) { this.hunger = Math.max(0, Math.min(v, 20)); }
     public int getVitalsHungerDecaySec() { return hungerDecaySec; }
     public void setVitalsHungerDecaySec(int v) { this.hungerDecaySec = Math.max(1, v); }
+    public float getTpCostPerBlock() { return tpCostPerBlock; }
+    public void setTpCostPerBlock(float v) { this.tpCostPerBlock = Math.max(0, v); }
+    public int getTpCostMax() { return tpCostMax; }
+    public void setTpCostMax(int v) { this.tpCostMax = Math.max(0, v); }
 
     /** 经验充值（来源：击杀/经验瓶/测试充值）。返回实际增加量。 */
     public int addXp(int amount) {
@@ -371,6 +382,10 @@ public class AvatarEntity extends PathfinderMob
             lastHungerDecayMs = now;
             if (hunger > 0) {
                 setVitalsHunger(hunger - 1);
+            }
+            // 自然回血（P3）：hunger >= 6 且血量未满时缓慢回血
+            if (hunger >= 6 && getHealth() < getMaxHealth()) {
+                setHealth(Math.min(getMaxHealth(), getHealth() + hpPerTick));
             }
         }
         // hunger 影响移速：hunger==0 → ×0.85（裁决⑤）
