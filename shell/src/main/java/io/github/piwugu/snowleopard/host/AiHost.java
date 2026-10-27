@@ -28,6 +28,7 @@ import io.github.piwugu.snowleopard.ChatRuntime;
 import io.github.piwugu.snowleopard.EntityToolsRuntime;
 import io.github.piwugu.snowleopard.ModelRegistry;
 import io.github.piwugu.snowleopard.PlayerTestArea;
+import io.github.piwugu.snowleopard.BuiltinRuntime;
 import io.github.piwugu.snowleopard.SnowLeopardMod;
 import io.github.piwugu.snowleopard.WakeBridge;
 import io.github.piwugu.snowleopard.tools.chat.ChatInbox;
@@ -51,7 +52,20 @@ public final class AiHost {
 
     private static volatile LlmClient client;
     private static volatile ConversationStore store;
-    private static volatile int maxRounds = 12;
+    /**
+     * 单轮（一次会话）最多跑几个回合。2026-10-27 17:10 (UTC+8)：12 → **32**。
+     *
+     * <p>12 轮到不了"走到玩家身边 + 看一圈 + 报告"这种复合任务就烧完了（真机 16:41 那次
+     * goto↔move_status 往返直接耗尽预算，模型被迫收束）。
+     */
+    private static volatile int maxRounds = 32;
+
+    /** 当前正在跑的模型（右键/提及在运行中要"注入"而不是"再排一个会话"）。 */
+    private static final java.util.Set<String> RUNNING = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 运行中收到的即时消息：不排队成新会话，直接塞进正在跑的这轮。 */
+    private static final Map<String, java.util.Queue<String>> INTERJECTS =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private static volatile int historyWindow = 40;
     /** 视觉能力（**单点计算**，见 {@link VisionCapability}）——每次会话开头重算。 */
     private static volatile VisionCapability capability =
@@ -294,6 +308,7 @@ public final class AiHost {
             SnowLeopardMod.LOG.warn("[雪豹框架][host] {} 会话开不了（在运行/锁冲突）——请求留在 pending", model);
             return;
         }
+        RUNNING.add(model);
         MemoryRecorder.Scope rec = MemoryRecorder.begin(core, model);
         VisionPending.beginSession(model);      // 截图预算按会话重置
         try {
@@ -312,6 +327,7 @@ public final class AiHost {
             rec.finish();
             core.wake().complete(req.reqId(), false, String.valueOf(e.getMessage()));
         } finally {
+            RUNNING.remove(model);
             // 会话结束还有在渲染的 → 转 DEFERRED（**不重试唤醒**，下次会话开头捎带）
             VisionPending.deferStillPending(model);
             WakeBridge.endSession(model);
@@ -352,7 +368,8 @@ public final class AiHost {
         // 只提供显式 tool_scope remove（core 的 clear() 仍保留给测试与会话重置用）。
 
         List<Map<String, Object>> messages = new ArrayList<>();
-        messages.add(Map.of("role", "system", "content", systemPrompt(core, model)));
+        String baseSystem = systemPrompt(core, model);
+        messages.add(Map.of("role", "system", "content", baseSystem));
         messages.addAll(store.window(model, historyWindow));
         Map<String, Object> userMsg = Map.of("role", "user", "content", user.toString());
         messages.add(userMsg);
@@ -367,6 +384,9 @@ public final class AiHost {
         String finalText = "";
         int dsmlRetries = 0;
         for (int round = 1; round <= maxRounds; round++) {
+            drainInterjects(model, messages);
+            refreshSessionLine(core, model, messages, baseSystem);
+            beginRound(core, model);
             List<Map<String, Object>> tools = toolSchemas(core, model);
             if (round == 1) {
                 SnowLeopardMod.LOG.info("[雪豹框架][host] 本轮声明 {} 个工具（工作集 {}，共 {} 组可用）",
@@ -374,6 +394,7 @@ public final class AiHost {
             }
             // 带图请求只在多模态提供商之间转移（能力守卫在 LlmClient 里，这里只负责判定）
             Map<String, Object> assistant = client.chat(model, messages, tools, hasImagePart(messages));
+            recordUsage(core, model, client);
             store.append(model, assistant);
             messages.add(assistant);
             rec.model(LlmClient.textOf(assistant.get("content")));
@@ -495,6 +516,79 @@ public final class AiHost {
         }
         String one = text.replace('\n', ' ').strip();
         return one.length() <= 120 ? one : one.substring(0, 120) + "…";
+    }
+
+    // ------------------------------------------------------------- 即时消息与会话进度
+
+    /** 模型是否正在跑会话（右键/提及据此决定"注入"还是"排队"）。 */
+    public static boolean isRunning(String model) {
+        return model != null && RUNNING.contains(model);
+    }
+
+    /**
+     * 把一条即时消息塞进正在跑的会话（**不新开会话**）。
+     *
+     * <p>2026-10-27 17:10 (UTC+8)：真人右键时若模型正在跑，core 的唤醒闸会直接拒（"目标在运行"），
+     * 玩家看到的是"唤醒被拒绝"——但玩家要的是"它现在知道我在叫它"。所以改成注入：
+     * 消息排进队列，模型本轮跑完工具后就能看到，不必等这次会话结束。
+     *
+     * @return true = 已注入（有会话在跑）；false = 没有在跑的会话（调用方走正常唤醒）
+     */
+    public static boolean interject(String model, String text) {
+        if (!isRunning(model) || text == null || text.isBlank()) {
+            return false;
+        }
+        INTERJECTS.computeIfAbsent(model, k -> new java.util.concurrent.ConcurrentLinkedQueue<>()).add(text);
+        SnowLeopardMod.LOG.info("[雪豹框架][host] 会话进行中收到即时消息（下一轮可见）: {}", brief(text));
+        return true;
+    }
+
+    private static void drainInterjects(String model, List<Map<String, Object>> messages) {
+        java.util.Queue<String> q = INTERJECTS.get(model);
+        if (q == null) {
+            return;
+        }
+        String line;
+        while ((line = q.poll()) != null) {
+            Map<String, Object> msg = Map.of("role", "user", "content", line);
+            messages.add(msg);
+            store.append(model, msg);
+        }
+    }
+
+    /**
+     * 每轮刷新 system 里的【会话进度】——模型据此判断"还够不够把这件事做完"。
+     *
+     * <p>2026-10-27 17:10 (UTC+8)：此前模型**完全不知道**剩余轮次与 token（只有主动调
+     * {@code session_usage} 才看得到，而它通常不会调）。现在每轮把 core 的
+     * {@code SessionGate.injectionLine()} 拼进 system，轮次上限用宿主自己的 {@code maxRounds}。
+     */
+    private static void refreshSessionLine(SnowLeopard core, String model,
+                                           List<Map<String, Object>> messages, String baseSystem) {
+        SnowLeopard.CallerScope sc = BuiltinRuntime.scope(model);
+        String usage = sc == null ? "" : " · " + sc.session().injectionLine();
+        messages.set(0, Map.of("role", "system", "content",
+                baseSystem + "\n【会话进度】本次会话最多 " + maxRounds + " 轮" + usage + "\n"));
+    }
+
+    private static void beginRound(SnowLeopard core, String model) {
+        SnowLeopard.CallerScope sc = BuiltinRuntime.scope(model);
+        if (sc != null) {
+            sc.session().beginRound();
+        }
+    }
+
+    /** 把这一轮的 token 用量喂给 core 的 SessionGate（让 session_usage / 进度行都是真的）。 */
+    private static void recordUsage(SnowLeopard core, String model, LlmClient client) {
+        SnowLeopard.CallerScope sc = BuiltinRuntime.scope(model);
+        if (sc == null) {
+            return;
+        }
+        long in = client.lastPromptTokens();
+        long out = client.lastCompletionTokens();
+        if (in > 0 || out > 0) {
+            sc.session().recordUsage(in, out);
+        }
     }
 
     /** 组短名 → 组全名（执行面拿到的只有短名，提示语要能给出可用的名字）。 */

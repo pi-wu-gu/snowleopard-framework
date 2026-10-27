@@ -20,7 +20,7 @@ import snowleopard.core.json.Json;
  *          "multimodal": true, "vision_model": "可选"} ],
  *        "roles": { "chat":"deepseek", "vision":"qwen-vl", "compress":"deepseek" },
  *        "vision": { "enabled": true, "width": 384, "height": 216 },
- *        "temperature": 0.7, "max_rounds": 12, "history_window": 40,
+ *        "temperature": 0.7, "max_rounds": 32, "history_window": 40,
  *        "models": { "clienttest": {"provider":"stepfun"} } }</pre>
  *
  * <p><b>为什么要有 {@code roles}</b>（2026-10-27 05:45 (UTC+8)）：原来的故障转移是"全 provider 环"，
@@ -171,7 +171,7 @@ public record LlmConfig(List<Provider> providers, double temperature, int maxRou
         }
         return new LlmConfig(providers,
                 root.get("temperature") instanceof Number n ? n.doubleValue() : 0.7,
-                root.get("max_rounds") instanceof Number n && n.intValue() > 0 ? n.intValue() : 12,
+                root.get("max_rounds") instanceof Number n && n.intValue() > 0 ? n.intValue() : 32,
                 root.get("history_window") instanceof Number n && n.intValue() > 0 ? n.intValue() : 40,
                 models, roles, vision(root.get("vision")));
     }

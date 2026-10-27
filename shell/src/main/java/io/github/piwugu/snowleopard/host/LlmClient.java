@@ -39,6 +39,25 @@ public final class LlmClient {
 
     /** 最近一次真正发出请求的提供商与模型名（可观测性：降级必须能被看见）。 */
     private volatile String lastProvider = "";
+
+    /**
+     * 最近一次响应的 token 用量（OpenAI 兼容端点的 {@code usage} 字段）。
+     *
+     * <p>2026-10-27 17:10 (UTC+8)：模型要"知道自己还剩多少轮/token"就得有人把用量喂回去。
+     * 这里只记最近一次，宿主每轮读走喂给 core 的 SessionGate（不塞进 message，免得回传上游）。
+     */
+    private volatile long lastPromptTokens;
+    private volatile long lastCompletionTokens;
+
+    /** 最近一次请求的输入 token（无 usage 字段时为 0）。 */
+    public long lastPromptTokens() {
+        return lastPromptTokens;
+    }
+
+    /** 最近一次请求的输出 token（无 usage 字段时为 0）。 */
+    public long lastCompletionTokens() {
+        return lastCompletionTokens;
+    }
     private volatile String lastModel = "";
 
     public LlmClient(LlmConfig config) {
@@ -269,9 +288,24 @@ public final class LlmClient {
         }
         lastProvider = p.name();
         lastModel = model;
+        if (root.get("usage") instanceof Map<?, ?> u) {
+            lastPromptTokens = asLong(u.get("prompt_tokens"));
+            lastCompletionTokens = asLong(u.get("completion_tokens"));
+        }
         @SuppressWarnings("unchecked")
         Map<String, Object> msg = (Map<String, Object>) message;
         return msg;
+    }
+
+    private static long asLong(Object o) {
+        if (o instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return o == null ? 0L : Long.parseLong(String.valueOf(o).trim());
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
     private static String snippet(String s) {

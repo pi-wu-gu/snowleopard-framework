@@ -28,6 +28,7 @@ import snowleopard.core.json.Json;
 import snowleopard.core.result.Result;
 import snowleopard.core.wake.WakeStore;
 
+import io.github.piwugu.snowleopard.host.AiHost;
 import io.github.piwugu.snowleopard.tools.avatar.AvatarStore;
 import io.github.piwugu.snowleopard.tools.chat.ChatMention;
 
@@ -383,6 +384,16 @@ public final class AvatarWake {
         Result r = core.wake().request(new WakeStore.Chain(List.of(from)), from, model,
                 sanitize(prompt), reason, key);
         if (r instanceof Result.Error err) {
+            // **运行中被叫：不排队，直接注入正在跑的会话**（2026-10-27 17:10 (UTC+8)）
+            // 唤醒闸有"目标在运行 → 拒"这条（防重复会话），但玩家右键/点名要的是"它现在知道"。
+            // 真机反馈："唤醒被拒绝"——拒绝完只剩一条提示，模型那轮根本看不到。
+            if (reason != null && (reason.startsWith("interact") || reason.startsWith("mention"))
+                    && AiHost.interject(model, "【即时消息·" + reason + "】" + sanitize(prompt)
+                    + "\n（这是运行中插进来的，不用重开任务；先看一眼再决定要不要调整）")) {
+                SnowLeopardMod.LOG.info("[雪豹框架][唤醒] {} 正在运行 → 已注入当前会话（{}）", model, reason);
+                note(feedbackTo, carrierName + "：正在忙，这条提醒已塞进它当前的会话");
+                return;
+            }
             // 唤醒失败 → 补提示（裁决：提示 ≠ 唤醒；"有人叫你但没叫起来"不能消失）
             SnowLeopardMod.LOG.warn("[雪豹框架][唤醒] {} → {} 失败：{}（已补一条提示）",
                     reason, model, err.desc());
