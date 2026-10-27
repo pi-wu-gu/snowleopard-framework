@@ -90,7 +90,11 @@ public class CoreItem extends BlockItem {
                 return InteractionResult.SUCCESS;
             }
             if (player.isShiftKeyDown()) {
-                return handleTeleport(player, avatar);
+                // 潜行+绑定核心+载体 → 打开配置界面（传送按钮在里面）
+                if (!player.level().isClientSide) {
+                    openCoreScreen(player, stack);
+                }
+                return InteractionResult.SUCCESS;
             }
             return handleXpTransfer(player, avatar);
         }
@@ -136,51 +140,6 @@ public class CoreItem extends BlockItem {
         return InteractionResult.SUCCESS;
     }
 
-    /** P5 付费传送：扣载体经验，叫到玩家身边（潜行右键）。 */
-    private static InteractionResult handleTeleport(Player player,
-                                                     io.github.piwugu.snowleopard.AvatarEntity avatar) {
-        if (player.level().isClientSide) {
-            return InteractionResult.SUCCESS;
-        }
-        // 校验：同维度
-        if (player.level() != avatar.level()) {
-            player.displayClientMessage(Component.literal("§e[受限核心] §c跨维度无法传送"), true);
-            return InteractionResult.SUCCESS;
-        }
-        // 费用 = ceil(距离 × 每格费率)，封顶
-        double dist = player.distanceTo(avatar);
-        int cost = (int) Math.ceil(dist * avatar.getTpCostPerBlock());
-        cost = Math.min(cost, avatar.getTpCostMax());
-        if (avatar.getVitalsXp() < cost) {
-            player.displayClientMessage(Component.literal(String.format(
-                    "§e[受限核心] §c载体经验不足（需要 %d，当前 %d）",
-                    cost, avatar.getVitalsXp())), true);
-            return InteractionResult.SUCCESS;
-        }
-        // 停动作（传送前先停，防止 goto/挖掘对旧目标继续跑）
-        io.github.piwugu.snowleopard.EntityToolsRuntime.dispatch(
-                avatar.boundModel(), "move", "move_stop", java.util.Map.of());
-        // 落点：玩家脚下一格 + 两格空气
-        var level = (net.minecraft.server.level.ServerLevel) player.level();
-        var feet = player.blockPosition();
-        var landing = feet.offset(0, 1, 0); // 玩家头顶（站人安全位）
-        // 简易落点检查：脚下实心 + 两格空气
-        boolean safe = level.getBlockState(landing.below()).isSolid()
-                && level.getBlockState(landing).isAir()
-                && level.getBlockState(landing.above()).isAir();
-        if (!safe) {
-            player.displayClientMessage(Component.literal("§e[受限核心] §c落点不安全，未扣费"), true);
-            return InteractionResult.SUCCESS;
-        }
-        // 扣费 + 传送
-        avatar.setVitalsXp(avatar.getVitalsXp() - cost);
-        avatar.teleportTo(landing.getX() + 0.5, landing.getY(), landing.getZ() + 0.5);
-        player.displayClientMessage(Component.literal(String.format(
-                "§a[付费传送] %s 已叫到身边（距离 %.1f 格，扣 %d 经验，剩余 %d）",
-                avatar.boundModel(), dist, cost, avatar.getVitalsXp())), true);
-        return InteractionResult.SUCCESS;
-    }
-
     @Override
     public InteractionResult useOn(UseOnContext context) {
         Player player = context.getPlayer();
@@ -192,6 +151,15 @@ public class CoreItem extends BlockItem {
             return InteractionResult.sidedSuccess(context.getLevel().isClientSide);
         }
         // 潜行右键=放置装饰方块（原版 BlockItem 流程；§二"摆放（次）"形态）
+        // **绑定核心禁放置**：绑定核心是"家钥匙"，放出去=丢钥匙
+        String home = getHomeNbt(context.getItemInHand());
+        if (!home.isEmpty()) {
+            if (player != null && !context.getLevel().isClientSide) {
+                player.displayClientMessage(Component.literal(
+                        "§e[受限核心] §c绑定核心不能放置（它是 " + home + " 的钥匙）"), true);
+            }
+            return InteractionResult.sidedSuccess(context.getLevel().isClientSide);
+        }
         if (!context.getLevel().isClientSide) {
             LOGGER.info("[CoreItem] sneak useOn pos={} face={}",
                     context.getClickedPos(), context.getClickedFace());
@@ -238,16 +206,9 @@ public class CoreItem extends BlockItem {
     /** 打开核心界面（服务端发 OpenScreen 包，客户端打开 GUI）。 */
     private static void openCoreScreen(Player player, ItemStack stack) {
         String home = getHomeNbt(stack);
-        if (home.isEmpty()) {
-            // 未绑定 → 家管理界面（创建/绑定）
-            var homes = CoreHomes.listHomes();
-            if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                PacketDistributor.sendToPlayer(sp, new CorePayloads.OpenScreen(homes, home));
-            }
-        } else {
-            // 已绑定 → 配置界面（P2 占位）
-            player.displayClientMessage(
-                    Component.literal("§e[受限核心] §f家 " + home + " 配置界面将在 P2 开放"), true);
+        var homes = CoreHomes.listHomes();
+        if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+            PacketDistributor.sendToPlayer(sp, new CorePayloads.OpenScreen(homes, home, home));
         }
     }
 

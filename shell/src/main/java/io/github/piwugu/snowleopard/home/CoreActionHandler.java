@@ -53,6 +53,8 @@ public final class CoreActionHandler {
             handleCreate(player, homeId);
         } else if ("BIND".equals(action)) {
             handleBind(player, homeId, stack);
+        } else if ("TELEPORT".equals(action)) {
+            handleTeleport(player, homeId);
         } else {
             sendResult(player, false, "未知操作：" + action);
         }
@@ -104,6 +106,58 @@ public final class CoreActionHandler {
             player.drop(bound, false);
         }
         sendResult(player, true, "已绑定到家 " + homeId + "（消耗 1 核心）");
+    }
+
+    /** P5 付费传送：扣载体经验，叫到玩家身边。 */
+    private static void handleTeleport(Player player, String homeId) {
+        // 找到 homeId 对应的载体（boundModel == homeId）
+        if (!(player.level() instanceof net.minecraft.server.level.ServerLevel serverLevel)) {
+            sendResult(player, false, "服务端错误");
+            return;
+        }
+        io.github.piwugu.snowleopard.AvatarEntity avatar = null;
+        for (var e : serverLevel.getEntities().getAll()) {
+            if (e instanceof io.github.piwugu.snowleopard.AvatarEntity av
+                    && homeId.equals(av.boundModel())) {
+                avatar = av;
+                break;
+            }
+        }
+        if (avatar == null) {
+            sendResult(player, false, "家 " + homeId + " 的载体不在线");
+            return;
+        }
+        // 同维度
+        if (player.level() != avatar.level()) {
+            sendResult(player, false, "跨维度无法传送");
+            return;
+        }
+        // 费用
+        double dist = player.distanceTo(avatar);
+        int cost = (int) Math.ceil(dist * avatar.getTpCostPerBlock());
+        cost = Math.min(cost, avatar.getTpCostMax());
+        if (avatar.getVitalsXp() < cost) {
+            sendResult(player, false,
+                    "载体经验不足（需要 " + cost + "，当前 " + avatar.getVitalsXp() + "）");
+            return;
+        }
+        // 停动作
+        io.github.piwugu.snowleopard.EntityToolsRuntime.dispatch(
+                homeId, "move", "move_stop", java.util.Map.of());
+        // 落点检查
+        var target = player.blockPosition();
+        boolean blocked = !serverLevel.getBlockState(target).getCollisionShape(serverLevel, target).isEmpty()
+                || !serverLevel.getBlockState(target.above()).getCollisionShape(serverLevel, target.above()).isEmpty();
+        if (blocked) {
+            sendResult(player, false, "落点被方块挡住，未扣费");
+            return;
+        }
+        // 扣费 + 传送
+        avatar.setVitalsXp(avatar.getVitalsXp() - cost);
+        avatar.teleportTo(player.getX(), player.getY(), player.getZ());
+        sendResult(player, true, String.format(
+                "%s 已叫到身边（距离 %.1f 格，扣 %d 经验，剩余 %d）",
+                homeId, dist, cost, avatar.getVitalsXp()));
     }
 
     // ---------- NBT 读写（home 字段） ----------
