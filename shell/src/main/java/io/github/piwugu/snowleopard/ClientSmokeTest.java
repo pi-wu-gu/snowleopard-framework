@@ -853,26 +853,30 @@ final class ClientSmokeTest {
                     && io.github.piwugu.snowleopard.home.CoreHomes.isValidId("ok_id-1"),
                     "reject a / has space, accept ok_id-1");
 
-            // P1-7: **核心归属校验**（2026-10-28 审查补）。原来这条规则只活在
-            // CoreActionHandler.handle(IPayloadContext) 里，57 条断言根本打不到它 →
-            // "手持任意一枚核心就能解绑别人的家"漏了一整个版本。规则抽成纯函数后这里直接打正反例。
-            boolean ownRejects = io.github.piwugu.snowleopard.home.CoreActionHandler
-                    .ownershipError("UNBIND", "victim", "") != null                 // 未绑定核心解绑他人
+            // P1-7: **所有权判据**（2026-10-28 两轮语义修正后的版本）。
+            // 绑定 = 消耗核心生成载体 → 玩家手里不再有"钥匙"，所以"谁能传送/释放"只能靠
+            // binding.player 判；旧版"钥匙"核心（home 字段非空）必须拒绝，避免两套语义混用。
+            boolean ownRejects =
+                    io.github.piwugu.snowleopard.home.CoreActionHandler
+                            .ownershipIssue("BIND", "newhome", "oldkey", null, "me") != null
                     && io.github.piwugu.snowleopard.home.CoreActionHandler
-                    .ownershipError("UNBIND", "victim", "other") != null           // 别人的钥匙
+                            .ownershipIssue("TELEPORT", "home", "", "owner", "intruder") != null
                     && io.github.piwugu.snowleopard.home.CoreActionHandler
-                    .ownershipError("TELEPORT", "victim", "other") != null         // 召唤他人的载体
+                            .ownershipIssue("UNBIND", "home", "", "owner", "intruder") != null
                     && io.github.piwugu.snowleopard.home.CoreActionHandler
-                    .ownershipError("BIND", "newhome", "oldhome") != null;         // 已绑定核心换绑
-            boolean ownAllows = io.github.piwugu.snowleopard.home.CoreActionHandler
-                    .ownershipError("UNBIND", "victim", "victim") == null          // 自己的钥匙
+                            .ownershipIssue("TELEPORT", "noavatar", "", null, "me") != null;
+            boolean ownAllows =
+                    io.github.piwugu.snowleopard.home.CoreActionHandler
+                            .ownershipIssue("BIND", "newhome", "", null, "me") == null
                     && io.github.piwugu.snowleopard.home.CoreActionHandler
-                    .ownershipError("BIND", "newhome", "") == null                 // 未绑定核心绑新家
+                            .ownershipIssue("TELEPORT", "home", "", "me", "me") == null
                     && io.github.piwugu.snowleopard.home.CoreActionHandler
-                    .ownershipError("CREATE", "newhome", "whatever") == null;      // 新建家不涉及归属
-            ok("P1 核心归属校验（他人核心不能解绑/召唤，已绑定核心不能换绑）",
+                            .ownershipIssue("UNBIND", "home", "", "me", "me") == null
+                    && io.github.piwugu.snowleopard.home.CoreActionHandler
+                            .ownershipIssue("CREATE", "newhome", "", null, "me") == null;
+            ok("P1 所有权判据（旧钥匙核心拒绝 / 非所有者不能传送释放 / 无载体则拒）",
                     ownRejects && ownAllows,
-                    "拒绝4例=" + ownRejects + " 放行3例=" + ownAllows);
+                    "拒绝4例=" + ownRejects + " 放行4例=" + ownAllows);
 
             // P2-7: Vitals 字段
             ok("P2 Vitals 字段默认值",

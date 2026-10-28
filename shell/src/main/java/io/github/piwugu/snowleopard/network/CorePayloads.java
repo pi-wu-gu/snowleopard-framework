@@ -28,8 +28,9 @@ public final class CorePayloads {
 
     // ---------- 服务端 → 客户端：打开界面 ----------
 
-    /** homeId 为空=未绑定（家管理界面）；非空=已绑定（配置+传送界面）。 */
-    public record OpenScreen(List<String> homes, String nonce, String homeId) implements CustomPacketPayload {
+    /** 家列表 + 哪些家已有载体 + nonce（防界面过期）。 */
+    public record OpenScreen(List<String> homes, List<String> withAvatar, String nonce)
+            implements CustomPacketPayload {
 
         public static final Type<OpenScreen> TYPE =
                 new Type<>(ResourceLocation.fromNamespaceAndPath("snowleopard", "core_open_screen"));
@@ -40,8 +41,11 @@ public final class CorePayloads {
                     for (String h : p.homes) {
                         buf.writeUtf(h);
                     }
+                    buf.writeVarInt(p.withAvatar.size());
+                    for (String h : p.withAvatar) {
+                        buf.writeUtf(h);
+                    }
                     buf.writeUtf(p.nonce == null ? "" : p.nonce);
-                    buf.writeUtf(p.homeId == null ? "" : p.homeId);
                 },
                 buf -> {
                     int n = buf.readVarInt();
@@ -49,7 +53,12 @@ public final class CorePayloads {
                     for (int i = 0; i < n; i++) {
                         homes.add(buf.readUtf());
                     }
-                    return new OpenScreen(homes, buf.readUtf(), buf.readUtf());
+                    int m = buf.readVarInt();
+                    List<String> withAvatar = new java.util.ArrayList<>(m);
+                    for (int i = 0; i < m; i++) {
+                        withAvatar.add(buf.readUtf());
+                    }
+                    return new OpenScreen(homes, withAvatar, buf.readUtf());
                 });
 
         @Override

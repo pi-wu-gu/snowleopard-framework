@@ -765,6 +765,58 @@ public final class AvatarWake {
     }
 
     /**
+     * 把一个**已存在的实体**登记成某模型的主载体（玩家侧绑定用，2026-10-28 语义修正）。
+     *
+     * <p>绑定 = 消耗核心 + **生成载体**；这里是"生成之后登记"的那一步。
+     * 与 {@code bind(model)} 的区别：那条走"当前 pick 到的实体"，这条直接收实体对象，
+     * 供服务端生成后立刻登记（不给玩家中间态：生成了却没登记）。
+     */
+    public static Result bindEntityTo(AvatarEntity avatar, String modelId) {
+        if (avatar == null || modelId == null || modelId.isBlank()) {
+            return Result.error("载体或模型编号为空");
+        }
+        String name = avatar.hasCustomName() ? avatar.getCustomName().getString() : modelId;
+        try {
+            AvatarStore.Entry entry = store.bind(avatar.getStringUUID(), modelId, name);
+            avatar.setBoundModel(modelId);
+            // 登记点之一：有载体 = 这个模型在世界里真的有个身体，从这一刻起它必须能被 @到
+            ModelRegistry.register(modelId);
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("uuid", entry.uuid());
+            out.put("model", modelId);
+            out.put("name", entry.name().isEmpty() ? modelId : entry.name());
+            return Result.ok(out);
+        } catch (IllegalArgumentException e) {
+            return Result.error(e.getMessage());   // 重名 → 拒绝（裁决 4）
+        }
+    }
+
+    /**
+     * 跨维度解析某模型**当前的主载体**（2026-10-28）：身份是 modelId，实体只是身体。
+     *
+     * <p>与 {@code primaryAvatar} 的区别：那条只在"登记里已写死的地址"上找，换世界就找不到；
+     * 这条按实体上的 SnowModelId 扫各维度，找不到再回落到登记地址。
+     * 玩家侧"传送到某家"用它——跨维度也算"有载体"，由调用方决定是否允许跨维度传送。
+     */
+    public static AvatarEntity primaryAvatarOf(String modelId) {
+        if (modelId == null || modelId.isBlank()) {
+            return null;
+        }
+        MinecraftServer srv = server();
+        if (srv == null) {
+            return null;
+        }
+        for (ServerLevel level : srv.getAllLevels()) {
+            for (Entity e : level.getEntities().getAll()) {
+                if (e instanceof AvatarEntity av && modelId.equals(av.boundModel())) {
+                    return av;
+                }
+            }
+        }
+        return primaryAvatar(modelId);   // 都没有 → 按登记地址再试一次
+    }
+
+    /**
      * 自检用：把某条登记的"地址"改成指定值，模拟"换世界 / 回档后旧 uuid 失效"。
      *
      * <p>为什么需要这条缝：实体 uuid 是 final、没法在测试里改，而"旧地址失效"正是本次要验的场景。

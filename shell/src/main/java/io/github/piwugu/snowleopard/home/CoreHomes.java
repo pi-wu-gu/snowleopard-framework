@@ -50,6 +50,30 @@ public final class CoreHomes {
         return homeExists(id) && Files.exists(idsRoot().resolve(id).resolve("core_binding.json"));
     }
 
+    /**
+     * 该家的所有者玩家 UUID（{@code core_binding.json} 的 {@code player} 字段）。
+     *
+     * <p>2026-10-28 语义修正后：**绑定 = 消耗核心生成载体**，玩家手里不再有"钥匙"，
+     * 于是"谁能传送/释放这个家的载体"只能靠这份所有权记录来判。
+     *
+     * @return 所有者 UUID 字符串；未绑定或读不出来 → null
+     */
+    public static String boundPlayer(String id) {
+        if (!isBound(id)) {
+            return null;
+        }
+        try {
+            var root = Json.parseObject(Files.readString(
+                    idsRoot().resolve(id).resolve("core_binding.json"), StandardCharsets.UTF_8));
+            Object p = root.get("player");
+            return p == null ? null : String.valueOf(p);
+        } catch (IOException | RuntimeException e) {
+            io.github.piwugu.snowleopard.SnowLeopardMod.LOG.warn(
+                    "[受限核心] 读 {}/core_binding.json 失败：{}", id, e.toString());
+            return null;
+        }
+    }
+
     /** 列出所有家 ID（按字典序）。 */
     public static List<String> listHomes() {
         List<String> out = new ArrayList<>();

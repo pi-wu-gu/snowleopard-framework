@@ -99,16 +99,13 @@ public class CoreItem extends BlockItem {
             return handleXpTransfer(player, avatar);
         }
 
-        // ── 未绑定 + 潜行 → 放置引导 ──
-        if (player.isShiftKeyDown()) {
-            if (!player.level().isClientSide) {
-                LOGGER.info("[CoreItem] sneak+entity target={} — advising block face",
-                        target.getType().getDescriptionId());
-                player.displayClientMessage(MSG_AIM_AT_BLOCK, true);
-            }
-            return InteractionResult.SUCCESS;
+        // ── 未绑定（新版核心恒此态）：右键载体也开界面 ──
+        // 2026-10-28 语义修正后核心不再是"钥匙"，右键载体与右键方块必须走同一个入口，
+        // 否则玩家对着载体右键只会看到挥手（P0 反馈不足的老坑）。
+        if (!player.level().isClientSide) {
+            openCoreScreen(player, stack);
         }
-        return InteractionResult.PASS;
+        return InteractionResult.SUCCESS;
     }
 
     /** P5 经验传输：玩家 XP → 载体 xp 池（每次 10 点）。 */
@@ -207,8 +204,15 @@ public class CoreItem extends BlockItem {
     private static void openCoreScreen(Player player, ItemStack stack) {
         String home = getHomeNbt(stack);
         var homes = CoreHomes.listHomes();
+        // 哪些家已经有载体（界面据此显示"传送"还是"生成载体"）
+        var withAvatar = new java.util.ArrayList<String>(homes.size());
+        for (String h : homes) {
+            if (io.github.piwugu.snowleopard.AvatarWake.hasPrimary(h)) {
+                withAvatar.add(h);
+            }
+        }
         if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-            PacketDistributor.sendToPlayer(sp, new CorePayloads.OpenScreen(homes, home, home));
+            PacketDistributor.sendToPlayer(sp, new CorePayloads.OpenScreen(homes, withAvatar, home));
         }
     }
 
