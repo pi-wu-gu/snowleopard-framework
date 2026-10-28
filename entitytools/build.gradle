@@ -46,4 +46,9 @@ test {
     testLogging {
         events 'passed', 'failed', 'skipped'
     }
+    // DocsCheckTest 读的是仓库里的 docs/ 与 gradle.properties，但它们**不是编译产物**，
+    // 不声明成输入的话，改文档不会触发重跑 → 检查永远是上一次的绿（2026-10-28 实测：
+    // 文档里留了不存在于源码树的类名，连着两个版本构建都"通过"）。
+    inputs.dir rootProject.file('docs')
+    inputs.file rootProject.file('gradle.properties')
 }

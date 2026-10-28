@@ -69,7 +69,7 @@ final class ClientSmokeTest {
         BlockPos base = player.blockPosition();
         EntityToolsRuntime.setScanAnchor(model, base);
         SnowLeopardMod.LOG.info("[雪豹框架][CLIENT] ===== 客户端验收开始（玩家 {}，位置 {}）=====",
-                player.getGameProfile().getName(), base);
+                player.getScoreboardName(), base);
 
         // 清掉上次验收残留的载体（同名会撞"禁重名"，残骸也没必要留）。
         // **循环清到干净**（2026-10-28）：一次遍历只覆盖当时已加载的实体，残留的在稍后加载的区块里
@@ -593,6 +593,18 @@ final class ClientSmokeTest {
                         + " yOffset(full)=" + io.github.piwugu.snowleopard.AvatarEyes
                                 .lidYOffset(lidFullScale));
 
+        // 自测开关真值表（2026-10-28 打包实例事故）：旧代码用 `else` 兜底跑全量自测，
+        // 于是"生产模式"（clienttest=false / selftest 未设）会建 8 座测试房并在收尾 server.halt(false)，
+        // 客户端卡在"加载地形 100%"。这条锁的就是"生产绝不能落进自测分支"。
+        boolean stOk = !io.github.piwugu.snowleopard.SnowLeopardMod.selfTestEnabled(false, false)
+                && io.github.piwugu.snowleopard.SnowLeopardMod.selfTestEnabled(false, true)
+                && !io.github.piwugu.snowleopard.SnowLeopardMod.selfTestEnabled(true, false)
+                && !io.github.piwugu.snowleopard.SnowLeopardMod.selfTestEnabled(true, true);
+        ok("自测开关三态：生产(clienttest=0,selftest=0)不跑自测、必须显式 selftest 才跑", stOk,
+                "生产=" + io.github.piwugu.snowleopard.SnowLeopardMod.selfTestEnabled(false, false)
+                        + " 显式自测=" + io.github.piwugu.snowleopard.SnowLeopardMod.selfTestEnabled(false, true)
+                        + " 验收优先=" + io.github.piwugu.snowleopard.SnowLeopardMod.selfTestEnabled(true, true));
+
         EntityToolsRuntime.dispatch(model, "view", "look",
                 Map.of("yaw", (double) gazeBase + 120, "pitch", 0.0));
         for (int i = 0; i < 80; i++) {
@@ -1005,7 +1017,7 @@ final class ClientSmokeTest {
             Result wake = core.wake().request(
                     new snowleopard.core.wake.WakeStore.Chain(java.util.List.of("ext-clock")),
                     "ext-clock", model,
-                    "host 自检：请用 chat_send 向玩家 " + player.getGameProfile().getName()
+                    "host 自检：请用 chat_send 向玩家 " + player.getScoreboardName()
                             + " 打一句招呼；然后破坏你脚边的一块地板（interact_break，测试区地板只有平滑石和石英，"
                             + "没有泥土/草方块，别去找），破完后用 world_query 确认掉落物停在地板那一层、"
                             + "没有沉到地板下面去；再用背包里的原木合成木板（craft_recipes 查配方 + craft）；"

@@ -1012,6 +1012,10 @@ public final class SelfTestScenario {
 
         // 造玩家类型目标（FakePlayer extends ServerPlayer → instanceof Player 命中审批）。
         // 显式放房内——不 moveTo 会落世界原点，房外残留跨运行存续（测试卫生）。
+        //
+        // **这里仍直接用 com.mojang.authlib.GameProfile**：`FakePlayer(level, profile)` 的签名就要它。
+        // 全量自测是**开发用**（`-Dsnowleopard.selftest=true`），dev 是平铺 classpath 能解析；
+        // 打包实例里插件层看不到 authlib（见 EntityToolsModule 的教训），所以**别在生产环境跑自测**。
         var fp1 = new net.neoforged.neoforge.common.util.FakePlayer(level,
                 new com.mojang.authlib.GameProfile(java.util.UUID.randomUUID(), "m7-victim1"));
         fp1.setPos(base.getX() + 6.5, base.getY(), base.getZ() + 2.5);

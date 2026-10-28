@@ -100,9 +100,11 @@ public final class EntityToolsModule {
     private float lastSetPitch;
     private String lockFace = "";
     private net.minecraft.core.BlockPos miningTarget;
-    private static final com.mojang.authlib.GameProfile FAKE_PROFILE = new com.mojang.authlib.GameProfile(
-            java.util.UUID.nameUUIDFromBytes("snowleopard-fake".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-            "SnowLeopardFake");
+    // **不要在这里存 GameProfile**（2026-10-28 打包实例实测）：entitytools 是 jarJar 内嵌库，
+    // 生产环境里它被装进的是"插件层"，`com.mojang.authlib` 不在那一层的可见模块里 →
+    // 类初始化就炸 NoClassDefFoundError: com/mojang/authlib/GameProfile，而且**整个
+    // EntityToolsModule 从此不可用**（ExceptionInInitializerError 之后每次都是 "Could not initialize class"）。
+    // dev 是平铺 classpath，所以永远看不到这个问题。改用 FakePlayerFactory.getMinecraft(level)。
     private volatile List<CandidateInfo> lastCandidates = List.of();
 
     public EntityToolsModule(String modelId, Ctx ctx) {
@@ -841,7 +843,9 @@ public final class EntityToolsModule {
         net.minecraft.world.phys.BlockHitResult hit = new net.minecraft.world.phys.BlockHitResult(
                 new net.minecraft.world.phys.Vec3(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5),
                 net.minecraft.core.Direction.UP, pos, false);
-        var player = net.neoforged.neoforge.common.util.FakePlayerFactory.get(level, FAKE_PROFILE);
+        // getMinecraft 是**不带 GameProfile 参数**的重载：调用点的签名里一旦出现
+        // com.mojang.authlib.GameProfile，插件层同样会解析失败（不只是构造那一下）。
+        var player = net.neoforged.neoforge.common.util.FakePlayerFactory.getMinecraft(level);
         player.setPos(self.getX(), self.getY(), self.getZ());
         player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, hand);
         var res = level.getBlockState(pos).useWithoutItem(level, player, hit);
@@ -881,7 +885,8 @@ public final class EntityToolsModule {
         }
         for (net.minecraft.server.level.ServerPlayer pl
                 : level.getEntitiesOfClass(net.minecraft.server.level.ServerPlayer.class, cell)) {
-            return Result.error("这个位置会压住玩家 " + pl.getGameProfile().getName()
+            // getScoreboardName() 只返回 String，调用点不出现 authlib 类型（同上的层可见性约束）
+            return Result.error("这个位置会压住玩家 " + pl.getScoreboardName()
                     + "，已拒绝（埋人不可逆）");
         }
         faceToward(self, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);

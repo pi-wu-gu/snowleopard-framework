@@ -200,9 +200,9 @@ public final class AvatarWake {
         ItemStack hand = event.getItemStack();
         String item = hand.isEmpty() ? "空手" : hand.getItem().toString().substring(hand.getItem().toString().lastIndexOf('.') + 1);
         String handName = event.getHand() == InteractionHand.OFF_HAND ? "副手" : "主手";
-        wakeFromPlayer("ext-player-" + safe(player.getGameProfile().getName()), avatar,
+        wakeFromPlayer("ext-player-" + safe(player.getScoreboardName()), avatar,
                 "interact:right_click",
-                "玩家 " + player.getGameProfile().getName() + " 用" + handName
+                "玩家 " + player.getScoreboardName() + " 用" + handName
                         + "右键了你（" + item + "，位置 " + pos(player) + "）",
                 player);
     }
@@ -265,7 +265,7 @@ public final class AvatarWake {
         var source = event.getContainer().getSource();
         Entity attackerEntity = source.getEntity();
         String who = attackerEntity == null ? source.getMsgId()
-                : (attackerEntity instanceof ServerPlayer sp ? sp.getGameProfile().getName()
+                : (attackerEntity instanceof ServerPlayer sp ? sp.getScoreboardName()
                         : attackerEntity.getType().toShortString());
         // **受击提示必须能直接支持决策**（2026-10-27 20:20 用户要求）：只说"你被攻击了，来源 Dev"
         // 的话，模型分不清是剑砍、箭射、摔伤还是掉进岩浆——而这三种该做的反应完全不同

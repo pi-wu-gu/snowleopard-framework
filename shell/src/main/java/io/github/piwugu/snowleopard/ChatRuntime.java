@@ -138,7 +138,7 @@ public final class ChatRuntime {
             return;
         }
         try {
-            record(ChatRecord.PLAYER, p.getGameProfile().getName(), text,
+            record(ChatRecord.PLAYER, p.getScoreboardName(), text,
                     String.valueOf(p.level().dimension().location()));
         } catch (RuntimeException e) {
             // 记录失败不该影响聊天本身（玩家说话是 MC 的事，存档是附加能力）

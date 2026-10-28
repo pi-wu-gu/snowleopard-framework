@@ -40,6 +40,18 @@ public final class SnowLeopardMod {
 
     private static volatile SnowLeopard core;
 
+    /**
+     * 全量自测是否启用：**必须显式** {@code -Dsnowleopard.selftest=true}，且不是客户端验收模式。
+     *
+     * <p>为什么抽成函数：旧写法用一个 {@code else} 兜底 —— 于是"生产模式"被归进"自测"，
+     * 玩家一进世界就被建 8 座测试房、刷候选实体，收尾 {@code server.halt(false)} 把集成服务器停掉，
+     * 客户端卡在"加载地形 100%"（2026-10-28 打包实例实测）。这种"漏配即执行破坏性操作"的分支，
+     * 必须让断言能直接打真值表，而不是靠人读 if-else。
+     */
+    static boolean selfTestEnabled(boolean clientTest, boolean selfTest) {
+        return selfTest && !clientTest;
+    }
+
     public SnowLeopardMod(ModContainer container) {
         try {
             Path gameDir = FMLPaths.GAMEDIR.get();
@@ -162,16 +174,23 @@ public final class SnowLeopardMod {
             net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(PlayerBatCapture::onEntityInteract);
             // 客户端验收模式（-Dsnowleopard.clienttest=true）：只跑"绑定中立生物 + 推送一行"。
             // 全量自测收尾会 server.halt(false)，在集成服务器上等于把客户端关掉，所以必须分道
-            if (Boolean.getBoolean("snowleopard.clienttest")) {
+            boolean selfTest = Boolean.getBoolean("snowleopard.selftest");
+            if (clientTest) {
                 net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(ClientSmokeTest::onPlayerJoin);
                 LOG.info("[雪豹框架] 客户端验收模式：跳过全量自测（不建塔、不 halt）");
                 String auto = System.getProperty("snowleopard.autoconnect", "");
                 LOG.info("[雪豹框架] 自动连接目标: {}", auto.isBlank() ? "（未设置）" : auto);
-            } else {
+            } else if (selfTestEnabled(clientTest, selfTest)) {
                 // M1 真机场景自测：M1–M3 同步段 + M4 tick 驱动段（开发流程验收）
                 net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SelfTestScenario::onServerStarted);
                 net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(SelfTestScenario::onServerTick);
                 SelfTest.run(core);
+            } else {
+                // **生产模式（ai.enabled）必须落到这里**（2026-10-28 打包实例实测）：
+                // 旧写法是 `else { 跑全量自测 }` —— 于是"生产"被归进了"自测"，
+                // 玩家一进世界就被建 8 座测试房、刷候选实体，收尾 server.halt(false) 直接把
+                // 集成服务器停掉，客户端卡在"加载地形 100%"。三态必须显式分开，不许再用 else 兜底。
+                LOG.info("[雪豹框架] 生产模式：不跑自测、不建测试房（-Dsnowleopard.selftest=true 才跑全量自测）");
             }
         } catch (Throwable t) {
             // 装配失败只该让"工具组能力不可用"，不该让整个模组加载失败
