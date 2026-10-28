@@ -84,8 +84,52 @@ public final class AvatarWake {
      * <p>对外公开的是**有没有**这个事实，不是登记项本身——身份解析（叫它什么名字）仍只有
      * {@link #primaryName} 一处；跨包问"我能不能移动/破坏"不需要拿到 Entry。
      */
-    public static boolean hasPrimary(String model) {
+    /**
+     * 该模型**此刻在世界里真的有载体吗**（扫实体，不看登记表）。
+     *
+     * <p>2026-10-28 用户要求："载体信息每次自动更新，不要写死在文件里"。
+     * 原来对外只暴露"登记表里有没有这条"，于是出现两种自相矛盾：
+     * ① 登记在、实体没了 → 界面显示"有载体"，一点传送却报"没有载体"；
+     * ② 实体在、登记丢了 → 界面显示"没有"，实际能操作。
+     *
+     * <p>**存在性只能来自世界里真实存在的实体**；`avatars.json` 是排程与地址缓存，不是事实来源。
+     * 注意：这里只看得见**已加载**的实体——远处未加载的载体扫不到，所以"写操作"（生成新载体）
+     * 还要额外查一次登记表（见 {@link #hasCarrierRecord}），避免一个 ID 生成出两只载体。
+     */
+    public static boolean hasCarrierNow(String model) {
+        return findAvatarInWorlds(model) != null;
+    }
+
+    /** 登记表里是否还有该模型的记录（**不代表实体存在**，写操作防重复时才用）。 */
+    public static boolean hasCarrierRecord(String model) {
         return primaryName(model) != null;
+    }
+
+    /** 跨维度扫世界里的载体（身份=实体上的 SnowModelId）。 */
+    private static AvatarEntity findAvatarInWorlds(String modelId) {
+        MinecraftServer srv = server();
+        if (srv == null || modelId == null || modelId.isBlank()) {
+            return null;
+        }
+        for (ServerLevel level : srv.getAllLevels()) {
+            for (Entity e : level.getEntities().getAll()) {
+                if (e instanceof AvatarEntity av && modelId.equals(av.boundModel())) {
+                    return av;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 该模型当前是否已有主载体——**兼容旧名，语义已改为实时**（等同 {@link #hasCarrierNow}）。
+     *
+     * @deprecated 用 {@link #hasCarrierNow}（读操作）或 {@link #hasCarrierRecord}（写操作防重复），
+     *             别再用一个名字同时表达两件事。
+     */
+    @Deprecated
+    public static boolean hasPrimary(String model) {
+        return hasCarrierNow(model);
     }
 
     /** 装配（ChatRuntime.init 之后）。 */
@@ -799,21 +843,21 @@ public final class AvatarWake {
      * 玩家侧"传送到某家"用它——跨维度也算"有载体"，由调用方决定是否允许跨维度传送。
      */
     public static AvatarEntity primaryAvatarOf(String modelId) {
-        if (modelId == null || modelId.isBlank()) {
-            return null;
+        AvatarEntity found = findAvatarInWorlds(modelId);
+        return found != null ? found : primaryAvatar(modelId);   // 都没有 → 按登记地址再试一次
+    }
+
+    /** 自检用：直接写一条登记（不需要真实实体），用来验证"登记在 ≠ 实体在"。 */
+    public static boolean bindRecordForTest(String modelId, String uuid, String name) {
+        if (store == null) {
+            return false;
         }
-        MinecraftServer srv = server();
-        if (srv == null) {
-            return null;
+        try {
+            store.bind(uuid, modelId, name);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
-        for (ServerLevel level : srv.getAllLevels()) {
-            for (Entity e : level.getEntities().getAll()) {
-                if (e instanceof AvatarEntity av && modelId.equals(av.boundModel())) {
-                    return av;
-                }
-            }
-        }
-        return primaryAvatar(modelId);   // 都没有 → 按登记地址再试一次
     }
 
     /**

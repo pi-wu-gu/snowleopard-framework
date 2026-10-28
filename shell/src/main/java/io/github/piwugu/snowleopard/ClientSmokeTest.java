@@ -150,6 +150,20 @@ final class ClientSmokeTest {
         ok("载体就位（豹猫外观，右键/点名可唤醒）", bindAv instanceof Result.Ok,
                 brief(bindAv) + " | 位置：你身前 2.5 格");
 
+        // ⑥·a 载体存在性必须**实时**（2026-10-28 用户要求"载体信息每次自动更新，不要写死在文件里"）。
+        // 造一条"登记在、实体不存在"的孤儿记录：登记表要能查到，但实时判据必须说"没有"。
+        // 这一条直接对着用户遇到的故障：界面显示"有载体"（读登记表）、操作却报"没有载体"（扫实体）。
+        String ghostId = "ghost-id";
+        boolean ghostBound = io.github.piwugu.snowleopard.AvatarWake.bindRecordForTest(
+                ghostId, "11111111-1111-4111-8111-111111111111", "幽灵");
+        boolean realNow = io.github.piwugu.snowleopard.AvatarWake.hasCarrierNow(model);
+        boolean ghostNow = io.github.piwugu.snowleopard.AvatarWake.hasCarrierNow(ghostId);
+        boolean ghostRecord = io.github.piwugu.snowleopard.AvatarWake.hasCarrierRecord(ghostId);
+        io.github.piwugu.snowleopard.AvatarWake.dispatch(ghostId, "avatar_unbind", Map.of());
+        ok("载体存在性实时（真载体=有 / 孤儿登记：实时判据说没有、登记表仍能查到）",
+                ghostBound && realNow && !ghostNow && ghostRecord,
+                "真载体=" + realNow + " 幽灵实时=" + ghostNow + " 幽灵记录=" + ghostRecord);
+
         // ⑥·b 身份自愈（2026-10-28 架构修正）：**实体存 ID，排程表里的 uuid 只是地址**。
         // 把登记的地址改成随机值（等价于换世界/回档后旧 uuid 失效），avatar_status 必须仍报 loaded=true，
         // 且地址被回写成当前实体的真 uuid。旧实现这里会 loaded=false 且**永不恢复**。

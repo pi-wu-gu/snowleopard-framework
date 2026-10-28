@@ -142,12 +142,22 @@ public final class CoreActionHandler {
             sendResult(player, false, "家 " + homeId + " 不存在");
             return;
         }
-        // **判据只认"真的有载体"**（2026-10-28 用户实测）：原来这里还查了 isBound（旧语义的
-        // "已绑定核心"记录），而界面展示只用"有没有载体"→ 旧记录遗留的家会显示"无载体"、
-        // 点"生成载体"却回"已经有载体了"。同一状态两套判据，必然自相矛盾。
-        if (AvatarWake.hasPrimary(homeId)) {
+        // **判据实时**（2026-10-28 用户要求：载体信息自动更新，不写死在文件里）。
+        // 只看"世界里此刻有没有这只载体"；登记表里有记录、实体扫不到 = **孤儿记录**，允许覆盖。
+        //
+        // 为什么不因孤儿记录拒绝：MC 的 getAll 只返回**已加载**实体，无法可靠区分"载体在远处未加载"
+        // 与"载体真的没了"。若按"有记录就拒"，一旦记录成了孤儿，这个 ID 就永远生成不出载体
+        // （界面显示无载体 → 只有"生成"按钮 → 点了被记录拦住 → 又没有"释放"入口）。
+        // 取舍：宁可允许覆盖（并记 WARN），也不让 ID 死锁。
+        if (AvatarWake.hasCarrierNow(homeId)) {
             sendResult(player, false, "家 " + homeId + " 已经有载体了（一个 ID 只能有一个载体）");
             return;
+        }
+        if (AvatarWake.hasCarrierRecord(homeId)) {
+            io.github.piwugu.snowleopard.SnowLeopardMod.LOG.warn(
+                    "[受限核心] {} 有孤儿登记记录（实体扫不到），本次生成将覆盖它", homeId);
+            // 先清掉同 modelId 的旧条目，否则 bind 之后会留下一条孤儿（指向已不存在的实体）
+            AvatarWake.dispatch(homeId, "avatar_unbind", java.util.Map.of());
         }
         // binding 在、载体没了 = 孤儿记录（旧语义遗留 / 载体被杀 / 换世界）：允许重新生成，
         // 但只能由原所有者来（否则谁都能抢别人已经付过核心的 ID）。

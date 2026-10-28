@@ -846,7 +846,7 @@ public final class AiHost {
                 ? "- 玩家测试区尚未建好（问位置时以你自己的坐标为准，别猜）。"
                 : "- " + area + "。";
         // 载体也不是"一定有一只豹猫"：没绑定就不许说有（否则模型会去找一只不存在的身体）
-        b.append(AvatarWake.hasPrimary(model)
+        b.append(AvatarWake.hasCarrierNow(model)
                 ? "。你的载体是一只名为「" + name + "」的豹猫外化身。\n"
                 : "。你当前没有绑定载体，无法移动与破坏（让操作生效需要先让人帮你绑定载体）。\n");
         b.append("""

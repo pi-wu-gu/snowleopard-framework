@@ -207,7 +207,8 @@ public class CoreItem extends BlockItem {
         // 哪些家已经有载体（界面据此显示"传送"还是"生成载体"）
         var withAvatar = new java.util.ArrayList<String>(homes.size());
         for (String h : homes) {
-            if (io.github.piwugu.snowleopard.AvatarWake.hasPrimary(h)) {
+            // **实时**判据（2026-10-28 用户要求）：存在性来自世界里的实体，不是 avatars.json
+            if (io.github.piwugu.snowleopard.AvatarWake.hasCarrierNow(h)) {
                 withAvatar.add(h);
             }
         }
