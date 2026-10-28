@@ -483,7 +483,10 @@ public final class AiHost {
         }
 
         // ③ 收尾：真被模型看到了才记账（推成功才 ack——同一铁律）
-        if (pulled != null && pulled.count() > 0) {
+        // **判据用"注入的文本非空"，不用渲染行数**（2026-10-28）：count 来自 ChatBlock 的渲染行数，
+        // 一旦消息被渲染层过滤（空文本/格式被丢弃），count 会是 0 而内容其实已经进了上下文 →
+        // 游标永不推进 → 每轮都报"新聊天 N 条"（用户看到的就是这个刷屏）。
+        if (pulled != null && pulled.block() != null && !pulled.block().isBlank()) {
             ChatRuntime.ack(model, pulled.lastSeq());
         }
         WakeBridge.consumeTurnLine(model);

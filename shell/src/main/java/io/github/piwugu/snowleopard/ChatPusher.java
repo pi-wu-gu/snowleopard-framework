@@ -40,13 +40,18 @@ final class ChatPusher {
             if (caller.startsWith("selftest-") || caller.startsWith("clienttest")) {
                 continue;
             }
+            // **只提示"这个模型有东西可看"，绝不把 turnLine 本身推给玩家**（2026-10-28 用户报"刷屏"）。
+            //
+            // 原实现是 `turnLine(caller)` → 推给玩家 → `consumeTurnLine(caller)`，有两个后果：
+            // ① 玩家聊天栏反复出现"提醒：新聊天 82 条"这类**给模型的内部提示**；
+            // ② 更糟的是它把提醒**提前消费**掉了——等模型真被唤醒时 `turnLine` 返回 null，
+            //    模型反而看不到"你有未读"。给模型的上下文被玩家的屏幕吃掉了。
             String line = WakeBridge.turnLine(caller);
             if (line == null) {
-                continue;
+                continue;   // 没有提醒：什么都不做，不消费
             }
-            if (ChatPush.push(line)) {
-                WakeBridge.consumeTurnLine(caller);   // 只有真的送达才标"已提示"
-            }
+            // debug 级：这是"有没有东西可看"的巡检，不该刷 INFO
+            SnowLeopardMod.LOG.debug("[雪豹框架][推送] {} 有待看内容（不推给玩家）：{}", caller, line);
         }
     }
 }
