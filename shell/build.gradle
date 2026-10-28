@@ -117,6 +117,9 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
             minecraft_version      : minecraft_version,
             minecraft_version_range: minecraft_version_range,
             neo_version            : neo_version,
+            // 声明的 neoforge 依赖下限（与编译版本分开）：卡在编译版本会让低一档的整合包
+            // 在加载阶段直接被拒（2026-10-28 兼容性测试前置）
+            neo_dependency_range   : neo_dependency_range,
             loader_version_range   : loader_version_range,
             mod_id                 : mod_id,
             mod_name               : mod_name,
