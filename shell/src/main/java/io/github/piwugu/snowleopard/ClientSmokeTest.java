@@ -795,6 +795,27 @@ final class ClientSmokeTest {
                     && io.github.piwugu.snowleopard.home.CoreHomes.isValidId("ok_id-1"),
                     "reject a / has space, accept ok_id-1");
 
+            // P1-7: **核心归属校验**（2026-10-28 审查补）。原来这条规则只活在
+            // CoreActionHandler.handle(IPayloadContext) 里，57 条断言根本打不到它 →
+            // "手持任意一枚核心就能解绑别人的家"漏了一整个版本。规则抽成纯函数后这里直接打正反例。
+            boolean ownRejects = io.github.piwugu.snowleopard.home.CoreActionHandler
+                    .ownershipError("UNBIND", "victim", "") != null                 // 未绑定核心解绑他人
+                    && io.github.piwugu.snowleopard.home.CoreActionHandler
+                    .ownershipError("UNBIND", "victim", "other") != null           // 别人的钥匙
+                    && io.github.piwugu.snowleopard.home.CoreActionHandler
+                    .ownershipError("TELEPORT", "victim", "other") != null         // 召唤他人的载体
+                    && io.github.piwugu.snowleopard.home.CoreActionHandler
+                    .ownershipError("BIND", "newhome", "oldhome") != null;         // 已绑定核心换绑
+            boolean ownAllows = io.github.piwugu.snowleopard.home.CoreActionHandler
+                    .ownershipError("UNBIND", "victim", "victim") == null          // 自己的钥匙
+                    && io.github.piwugu.snowleopard.home.CoreActionHandler
+                    .ownershipError("BIND", "newhome", "") == null                 // 未绑定核心绑新家
+                    && io.github.piwugu.snowleopard.home.CoreActionHandler
+                    .ownershipError("CREATE", "newhome", "whatever") == null;      // 新建家不涉及归属
+            ok("P1 核心归属校验（他人核心不能解绑/召唤，已绑定核心不能换绑）",
+                    ownRejects && ownAllows,
+                    "拒绝4例=" + ownRejects + " 放行3例=" + ownAllows);
+
             // P2-7: Vitals 字段
             ok("P2 Vitals 字段默认值",
                     avatar.getVitalsXp() == 0 && avatar.getVitalsXpMax() == 1000

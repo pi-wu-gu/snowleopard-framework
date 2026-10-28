@@ -27,7 +27,7 @@ public final class CoreHomes {
     private CoreHomes() {
     }
 
-    /** ID 规则：字母/数字/下划线/连字符，2–32 字符（与目录名安全兼容）。 */
+    /** ID 规则：字母/数字/下划线/连字符，2–32 字符。点号被排除，`resolve` 天然安全（无路径穿越）。 */
     private static final Pattern ID_PATTERN = Pattern.compile("^[a-zA-Z0-9_-]{2,32}$");
 
     /** ids 根目录（{@code <gameDir>/snowleopard/ids}）。 */
@@ -35,7 +35,7 @@ public final class CoreHomes {
         return FMLPaths.GAMEDIR.get().resolve("snowleopard").resolve("ids");
     }
 
-    /** ID 是否合法（格式 + 非保留名）。 */
+    /** ID 是否合法（**只校验格式**；与既有家重名由 {@link #homeExists} 拦，不在此判）。 */
     public static boolean isValidId(String id) {
         return id != null && ID_PATTERN.matcher(id).matches();
     }
@@ -64,7 +64,9 @@ public final class CoreHomes {
                     .sorted()
                     .forEach(out::add);
         } catch (IOException e) {
-            // 列表失败不致命，返回已收集的部分
+            // 列表失败不致命（返回已收集的部分），但**必须留痕**：否则模型看到空列表会以为"一个家都没有"
+            io.github.piwugu.snowleopard.SnowLeopardMod.LOG.warn(
+                    "[受限核心] 列家失败（返回已收集的 {} 个）：{}", out.size(), e.toString());
         }
         return out;
     }
@@ -72,20 +74,28 @@ public final class CoreHomes {
     /**
      * 创建家（最小骨架）。<b>不绑定</b>——绑定是独立分支。
      *
-     * @return true=创建成功；false=已存在或失败
+     * <p>骨架必须与记忆的**平级五层**一致（日/周/月/季/年）：只建三层会让季档、年档
+     * 写入时才发现目录不存在（2026-10-28 审查发现）。
+     *
+     * <p><b>失败必须回滚</b>：残留半成品目录会让 {@link #homeExists} 变真 →
+     * 这个 ID 从此永远建不起来（每次都在"已存在"处返回 false），只能手删目录。同"清家必须清后重建"一族。
+     *
+     * @return true=创建成功；false=已存在或失败（失败已回滚、已记日志）
      */
     public static boolean createHome(String id) {
         if (!isValidId(id) || homeExists(id)) {
             return false;
         }
         Path dir = idsRoot().resolve(id);
+        boolean rootExisted = Files.isDirectory(dir);
         try {
             // 最小骨架（与 clienttest 目录结构对齐）
             Files.createDirectories(dir.resolve("groups"));
             Files.createDirectories(dir.resolve("host"));
-            Files.createDirectories(dir.resolve("memory").resolve("days"));
-            Files.createDirectories(dir.resolve("memory").resolve("months"));
-            Files.createDirectories(dir.resolve("memory").resolve("weeks"));
+            Path mem = dir.resolve("memory");
+            for (String level : List.of("days", "weeks", "months", "quarters", "years")) {
+                Files.createDirectories(mem.resolve(level));
+            }
             Files.createDirectories(dir.resolve("memory-raw"));
             // 初始空文件
             Files.writeString(dir.resolve("chat-cursor.json"), "{}\n", StandardCharsets.UTF_8);
@@ -93,7 +103,31 @@ public final class CoreHomes {
             Files.writeString(dir.resolve("host").resolve("history.jsonl"), "", StandardCharsets.UTF_8);
             return true;
         } catch (IOException e) {
+            if (!rootExisted) {
+                deleteRecursively(dir);
+            }
+            io.github.piwugu.snowleopard.SnowLeopardMod.LOG.warn(
+                    "[受限核心] 建家失败并已回滚 {}：{}", id, e.toString());
             return false;
+        }
+    }
+
+    /** 递归删除（只用于回滚自己刚建的目录；失败也只记日志，不抛）。 */
+    private static void deleteRecursively(Path dir) {
+        if (!Files.exists(dir)) {
+            return;
+        }
+        try (Stream<Path> s = Files.walk(dir)) {
+            s.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException ignored) {
+                    // 删不干净只会留下空目录，下次建家仍会因"已存在"失败——记一条就够
+                    io.github.piwugu.snowleopard.SnowLeopardMod.LOG.warn("[受限核心] 回滚残留 {}", p);
+                }
+            });
+        } catch (IOException e) {
+            io.github.piwugu.snowleopard.SnowLeopardMod.LOG.warn("[受限核心] 回滚失败 {}：{}", dir, e.toString());
         }
     }
 

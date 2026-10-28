@@ -48,6 +48,18 @@ public final class CoreActionHandler {
             return;
         }
 
+        // ── 校验②b：**核心归属**（服务端权威，不信包里的 homeId）──
+        // 2026-10-28 12:20 审查发现：只验 nonce 不验归属 → 手持任意一枚核心即可
+        // 发 `UNBIND homeId=别人的家` 解绑他人（`core_binding.json` 被删、自己白拿一枚未绑定核心），
+        // `TELEPORT` 同理可把别人的载体强行叫到身边并扣它的经验。
+        // 判据很直接：同一系统里 CoreItem.interactLivingEntity 早就有 `home.equals(boundModel())`，
+        // **网络入口漏了同一道校验**——两处口径分家就是这类漏洞的温床。
+        String ownErr = ownershipError(action, homeId, currentNonce);
+        if (ownErr != null) {
+            sendResult(player, false, ownErr);
+            return;
+        }
+
         // ── 校验③ + ④ 按分支 ──
         if ("CREATE".equals(action)) {
             handleCreate(player, homeId);
@@ -60,6 +72,32 @@ public final class CoreActionHandler {
         } else {
             sendResult(player, false, "未知操作：" + action);
         }
+    }
+
+    /**
+     * 归属校验（**纯函数**，可被验收直接断言）。{@code null} = 通过，否则是拒绝原因。
+     *
+     * <p>抽成纯函数的原因：这条规则原本只活在 {@link #handle} 里，而 handle 要 {@code IPayloadContext}，
+     * 验收根本打不到它——2026-10-28 的权限缺口正是这样漏过了 57 条断言。规则写在能断言的地方。
+     *
+     * @param action    CREATE | BIND | UNBIND | TELEPORT
+     * @param heldHome  手持核心的 home 字段（未绑定 = ""）
+     */
+    public static String ownershipError(String action, String homeId, String heldHome) {
+        if (homeId == null || homeId.isEmpty()) {
+            return null;   // CREATE 不涉及归属
+        }
+        String held = heldHome == null ? "" : heldHome;
+        if ("BIND".equals(action) && !held.isEmpty()) {
+            // 只有**未绑定**的核心才能去绑新家；否则旧家的 core_binding.json 会残留，
+            // 变成谁也指不回去的"僵尸绑定"（没有核心能再指向它，UNBIND 又要求手持核心）。
+            return "这枚核心已绑定到 " + held + "，请先解绑再用于绑定新家";
+        }
+        if (("UNBIND".equals(action) || "TELEPORT".equals(action)) && !homeId.equals(held)) {
+            return "这枚核心不是 " + homeId + " 的钥匙（它绑定的是 "
+                    + (held.isEmpty() ? "无" : held) + "）";
+        }
+        return null;
     }
 
     private static void handleCreate(Player player, String homeId) {
