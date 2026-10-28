@@ -567,6 +567,32 @@ final class ClientSmokeTest {
                         + " pupilEnd=" + pupilEnd + " bodyYaw=" + avatar.getYRot()
                         + " base=" + gazeBase);
 
+        // 眼部两个默认值（2026-10-28 用户指定）：瞳孔默认下移 0.2px、眼皮最小高度 0.5px。
+        // 断言的是**算式**而不是"字段存在"：① 下移方向必须是 +y（y 反了会变成往上看，肉眼很难分辨）；
+        // ② 眼皮高度无论传多小都得钳在 0.5px 以上（旧实现用 visible 开关，睁眼高度是 0 —— 眨眼
+        //    看起来是"灰白毛突然出现"，而不是"眼皮滑下来"）；③ 固定上缘的偏移量必须与缩放配套。
+        float lidOnOpen = io.github.piwugu.snowleopard.AvatarEyes.lidHeight(
+                io.github.piwugu.snowleopard.AvatarEyes.lidScale(
+                        io.github.piwugu.snowleopard.AvatarEyes.LID_MIN_HEIGHT));
+        float lidOnZero = io.github.piwugu.snowleopard.AvatarEyes.lidHeight(
+                io.github.piwugu.snowleopard.AvatarEyes.lidScale(0F));
+        float lidOnFull = io.github.piwugu.snowleopard.AvatarEyes.lidHeight(
+                io.github.piwugu.snowleopard.AvatarEyes.lidScale(
+                        io.github.piwugu.snowleopard.AvatarEyes.LID_FULL_HEIGHT));
+        float lidFullScale = io.github.piwugu.snowleopard.AvatarEyes.lidScale(
+                io.github.piwugu.snowleopard.AvatarEyes.LID_FULL_HEIGHT);
+        ok("眼部默认值：瞳孔下移 0.2（+y）、眼皮最小高度 0.5",
+                Math.abs(io.github.piwugu.snowleopard.AvatarEyes.pupilRestY(-4.5F) - (-4.3F)) < 1e-4F
+                        && Math.abs(lidOnOpen - 0.5F) < 1e-4F
+                        && Math.abs(lidOnZero - 0.5F) < 1e-4F          // 传 0 也被钳到最小高度
+                        && Math.abs(lidOnFull - 2.0F) < 1e-4F
+                        && Math.abs(io.github.piwugu.snowleopard.AvatarEyes
+                                .lidYOffset(lidFullScale)) < 1e-4F,     // 满高时不该再平移
+                "pupilY(-4.5)=" + io.github.piwugu.snowleopard.AvatarEyes.pupilRestY(-4.5F)
+                        + " 睁眼高=" + lidOnOpen + " 传0=" + lidOnZero + " 闭眼高=" + lidOnFull
+                        + " yOffset(full)=" + io.github.piwugu.snowleopard.AvatarEyes
+                                .lidYOffset(lidFullScale));
+
         EntityToolsRuntime.dispatch(model, "view", "look",
                 Map.of("yaw", (double) gazeBase + 120, "pitch", 0.0));
         for (int i = 0; i < 80; i++) {

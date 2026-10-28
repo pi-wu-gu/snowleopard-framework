@@ -145,6 +145,7 @@ def to_java_point(p):
 HEAD_TMPL = """package {pkg}.client.model;
 
 import {pkg}.{entity};
+import {pkg}.AvatarEyes;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.model.EntityModel;
@@ -171,6 +172,9 @@ public class {cls} extends EntityModel<{entity}> {{
     public static final ModelLayerLocation LAYER_LOCATION =
             new ModelLayerLocation(
                     ResourceLocation.fromNamespaceAndPath("{modid}", "{layer}"), "main");
+
+    // 瞳孔默认下移 0.2px、眼皮最小高度 0.5px —— 两个量都在 AvatarEyes（纯函数、无客户端依赖），
+    // 这样服务端断言能直接打它们；数值变化不需要改模型，重跑生成器也不会覆盖。
 
     private final ModelPart root;
 """
@@ -322,11 +326,18 @@ def build_setup_anim(bones):
     # 眼皮（眨眼）
     lids = [n for n in names if n.startswith("eye_lid")]
     if lids:
-        A("\n        // 眨眼：眼皮默认隐藏（本模型眼皮与眼白同尺寸，静态显示会盖住眼睛），\n")
-        A("        // 每 100 tick 眨一次、闭合 4 tick。要改成\"默认闭合\"只翻转两个分支即可。\n")
+        A("\n        // 眨眼（2026-10-28 改法）：眼皮改成**高度可变**，常态保留最小高度 0.5px 的窄边。\n")
+        A("        //\n")
+        A("        // 旧做法是 visible 开关：睁眼时高度 0、闭眼时整块盖住 —— 视觉上是\"灰白毛突然\n")
+        A("        // 出现又突然消失\"，而不是\"眼皮滑下来\"。现在常态就有 0.5px，眨眼时展开到满高。\n")
+        A("        // 缩放绕 part pivot（盒子中心），所以展开时要把中心上移 (1 − s) 才能**固定上缘**。\n")
         A("        boolean blink = (ageInTicks % 100.0F) < 4.0F;\n")
+        A("        float lidScale = AvatarEyes.lidScale(blink ? AvatarEyes.LID_FULL_HEIGHT\n"
+          "                : AvatarEyes.LID_MIN_HEIGHT);\n")
         for n in lids:
-            A("        this.%s.visible = blink;\n" % camel(n))
+            A("        this.%s.resetPose();\n" % camel(n))
+            A("        this.%s.yScale = lidScale;\n" % camel(n))
+            A("        this.%s.y += AvatarEyes.lidYOffset(lidScale);\n" % camel(n))
 
     # 瞳孔（预留：几何修好后自动生效）
     pupils = [n for n in names if n.startswith("eye_pupil")]
@@ -335,12 +346,14 @@ def build_setup_anim(bones):
         A("        // 必须先 resetPose() 回到 PartPose 基准再加：ModelPart.x/y/z 就是基准位移本身，\n")
         A("        // 直接 x = gazeX 会把 PartPose 的偏移整个抹掉——v1.12.2 真机即如此，\n")
         A("        // 瞳孔掉到眼睛组 pivot（= 头的 pivot 高度），看起来就是\"跑到下颚中间\"。\n")
+        A("        // 左右同值（MC 玩家模型的规矩，别镜像）；y 再叠一步默认下移 0.2。\n")
         A("        float gazeX = Mth.clamp(netHeadYaw * 0.008F, -0.2F, 0.2F);\n")
         A("        float gazeY = Mth.clamp(headPitch * 0.006F, -0.15F, 0.15F);\n")
         for n in pupils:
             A("        this.%s.resetPose();\n" % camel(n))
             A("        this.%s.x += gazeX;\n" % camel(n))
-            A("        this.%s.y += gazeY;\n" % camel(n))
+            A("        this.%s.y = AvatarEyes.pupilRestY(this.%s.y) + gazeY;   "
+              "// 基准 + 默认下移 0.2（+y 才是下）\n" % (camel(n), camel(n)))
 
     # 下颚（外部状态驱动）
     if "jaw" in names:
