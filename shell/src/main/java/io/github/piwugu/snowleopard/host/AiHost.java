@@ -133,6 +133,37 @@ public final class AiHost {
     }
 
     /**
+     * AI 执行端是否启用——**生产开关，与验收开关分离**（2026-10-28）。
+     *
+     * <p>原来只有系统属性 `snowleopard.clienttest` 一个开关，于是"在真实存档里跑 AI"必然连带：
+     * 58 条断言（传送玩家、造实体、破坏方块）、`PlayerTestArea.ensureBuilt`（在存档里建测试塔）。
+     * 现在两层：**验收模式强制开**（测试要 host 接线）；生产必须显式写 {@code ai.enabled=true}，
+     * **缺省关闭**——默认不开比默认开安全，生产服的存档不该被"忘了配"的东西改。
+     *
+     * <p>读的是 `config/snowleopard-llm.json` 的 `ai` 段：没有 LLM 配置就不可能跑 AI，放同一文件最省心。
+     */
+    public static boolean aiEnabled(Path gameDir) {
+        Path f = gameDir.resolve("config").resolve("snowleopard-llm.json");
+        if (!java.nio.file.Files.isRegularFile(f)) {
+            return false;
+        }
+        try {
+            Map<String, Object> root = Json.parseObject(java.nio.file.Files.readString(
+                    f, java.nio.charset.StandardCharsets.UTF_8));
+            if (root.get("ai") instanceof Map<?, ?> ai) {
+                Object v = ai.get("enabled");
+                return v instanceof Boolean b
+                        ? b : "true".equalsIgnoreCase(String.valueOf(v).trim());
+            }
+            return false;
+        } catch (RuntimeException | java.io.IOException e) {
+            // 配坏了按关闭处理，但**必须留痕**：否则"AI 不说话"会被当成模型问题查半天
+            SnowLeopardMod.LOG.warn("[雪豹框架][host] ai.enabled 读取失败，按关闭处理：{}", e.toString());
+            return false;
+        }
+    }
+
+    /**
      * 视觉能力紧凑串（{@code view/status} 用）。
      *
      * <p>**永远给得出话**：没启用也要说明为什么（"视觉未启用（vision.enabled=false）"），
@@ -164,13 +195,17 @@ public final class AiHost {
 
     /**
      * 装配。配置文件不存在 = host 停用（如实记日志，不降级成假执行）。
-     * **只在客户端验收模式接线**：全量自测模式里自测自己数 pending，host 会把请求消费掉造成假失败
-     * （接线与否由调用方用 {@code enabled} 控制；Compressor 走 {@link #compressorOrNull}，在 bootstrap 前注入）。
+     *
+     * <p>{@code enabled} 由调用方决定（2026-10-28 拆两层）：验收模式强制 true；生产看
+     * {@link #aiEnabled} 的 `ai.enabled`。**全量自测模式必须关**——自测自己数 pending，
+     * host 会把请求消费掉造成假失败（接线与否由调用方用 {@code enabled} 控制；
+     * Compressor 走 {@link #compressorOrNull}，在 bootstrap 前注入，不受此开关影响）。
      */
     public static void init(Path gameDir, SnowLeopard core, boolean enabled) {
         Path f = gameDir.resolve("config").resolve("snowleopard-llm.json");
         if (!enabled) {
-            SnowLeopardMod.LOG.info("[雪豹框架][host] 非客户端验收模式——AI 执行端停用（自测要自己数 pending）");
+            SnowLeopardMod.LOG.info("[雪豹框架][host] AI 执行端未启用"
+                    + "（验收模式未开，且 config 里没有 ai.enabled=true）——工具与核心仍可用，只是没有模型在跑");
             return;
         }
         if (!java.nio.file.Files.isRegularFile(f)) {

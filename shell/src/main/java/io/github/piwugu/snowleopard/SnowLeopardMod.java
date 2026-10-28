@@ -109,12 +109,21 @@ public final class SnowLeopardMod {
             container.getEventBus().addListener(
                     io.github.piwugu.snowleopard.network.CorePayloads::register);
             AvatarWake.init(gameDir, core);
-            // AI 执行端（host 层）：轮询 + 会话 + 工具循环——只在客户端验收模式启用
-            // （全量自测要自己数 pending，host 抢跑会造成假失败）
+            // AI 执行端（host 层）：轮询 + 会话 + 工具循环。
+            // **两层开关**（2026-10-28 拆）：验收模式强制开（测试要 host 接线）；
+            // 生产必须显式 config 里写 ai.enabled=true —— 否则"在真实存档跑 AI"会连带
+            // 跑 58 条断言（传送玩家/造实体/破坏方块）并在存档里建测试塔。
             boolean clientTest = Boolean.getBoolean("snowleopard.clienttest");
-            io.github.piwugu.snowleopard.host.AiHost.init(gameDir, core, clientTest);
-            if (clientTest) {
+            boolean aiEnabled = clientTest
+                    || io.github.piwugu.snowleopard.host.AiHost.aiEnabled(gameDir);
+            io.github.piwugu.snowleopard.host.AiHost.init(gameDir, core, aiEnabled);
+            if (aiEnabled) {
                 net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener(io.github.piwugu.snowleopard.host.AiHost::onServerTick);
+            }
+            if (!aiEnabled) {
+                LOG.info("[雪豹框架][host] AI 执行端：停用（clienttest=false 且 config 无 ai.enabled=true）");
+            } else {
+                LOG.info("[雪豹框架][host] AI 执行端：{}", clientTest ? "验收模式(clienttest)" : "生产模式(ai.enabled)");
             }
 
             core.startupReport().forEach(line -> LOG.info("[雪豹框架] {}", line));

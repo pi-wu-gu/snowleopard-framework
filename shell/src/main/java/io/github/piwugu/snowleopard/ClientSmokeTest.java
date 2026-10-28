@@ -442,6 +442,28 @@ final class ClientSmokeTest {
                         && "show".equals(io.github.piwugu.snowleopard.host.AiHost.realNameOf("vision_show")),
                 "vision_shot→" + shotReal);
 
+        //    (k3b) AI 开关与验收开关分离（v1.15.3）：生产实例想开 AI 不能再被迫跑验收
+        //        （旧实现只有 `snowleopard.clienttest` 一个属性 → 连带传送玩家、造实体、在真实存档建测试塔）。
+        //        断言两件事：**缺省必须关**（默认开等于生产存档被"忘了配"改掉）、显式 true 才开。
+        boolean aiFlagOk = false;
+        java.nio.file.Path tmpFlag = null;
+        try {
+            tmpFlag = java.nio.file.Files.createTempDirectory("sl-ai-flag");
+            java.nio.file.Files.createDirectories(tmpFlag.resolve("config"));
+            java.nio.file.Path cfgFile = tmpFlag.resolve("config").resolve("snowleopard-llm.json");
+            java.nio.file.Files.writeString(cfgFile, "{\"providers\":[]}",
+                    java.nio.charset.StandardCharsets.UTF_8);
+            boolean offByDefault = !io.github.piwugu.snowleopard.host.AiHost.aiEnabled(tmpFlag);
+            java.nio.file.Files.writeString(cfgFile, "{\"ai\":{\"enabled\":true}}",
+                    java.nio.charset.StandardCharsets.UTF_8);
+            boolean onWhenSet = io.github.piwugu.snowleopard.host.AiHost.aiEnabled(tmpFlag);
+            aiFlagOk = offByDefault && onWhenSet;
+        } catch (java.io.IOException e) {
+            aiFlagOk = false;
+        }
+        ok("AI 开关与验收开关分离（缺省关 / 显式 ai.enabled=true 才开）", aiFlagOk,
+                "临时配置验证 · " + (tmpFlag == null ? "建目录失败" : tmpFlag.getFileName()));
+
         //    (k4) 工具声明跟随工作集（v1.13.0，取代 v1.12.10 的"按话题排序"）：
         //        默认只声明目录组三件；tool_help/tool_scope 取用某组后，**下一轮**才带出那组的签名。
         //        断言的是"声明集合真的跟着工作集变"，不是"分组字段存在"。
