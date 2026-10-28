@@ -172,12 +172,16 @@ public final class CoreHomes {
     }
 
     /**
-     * 绑定核心到家（写 {@code core_binding.json}）。一核心一家：已绑定则拒绝。
+     * 写所有权记录（{@code core_binding.json}）。
      *
-     * @return true=绑定成功；false=家不存在 / 已绑定 / 写入失败
+     * <p><b>允许覆盖已有记录</b>（2026-10-28）：孤儿记录（binding 在、载体已经没了——旧语义遗留、
+     * 载体被杀、换世界）必须能被"重新生成载体"覆盖，否则那个 ID 永久不可用。
+     * 「一 ID 一载体」由调用方用"是否真的有载体"来拦，**不靠这个文件在不在**。
+     *
+     * @return true=写入成功；false=家不存在或写不进去
      */
     public static boolean bindCore(String id, String playerUuid, String playerName) {
-        if (!homeExists(id) || isBound(id)) {
+        if (!homeExists(id)) {
             return false;
         }
         Path f = idsRoot().resolve(id).resolve("core_binding.json");

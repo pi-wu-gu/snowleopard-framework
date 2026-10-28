@@ -142,8 +142,18 @@ public final class CoreActionHandler {
             sendResult(player, false, "家 " + homeId + " 不存在");
             return;
         }
-        if (AvatarWake.hasPrimary(homeId) || CoreHomes.isBound(homeId)) {
+        // **判据只认"真的有载体"**（2026-10-28 用户实测）：原来这里还查了 isBound（旧语义的
+        // "已绑定核心"记录），而界面展示只用"有没有载体"→ 旧记录遗留的家会显示"无载体"、
+        // 点"生成载体"却回"已经有载体了"。同一状态两套判据，必然自相矛盾。
+        if (AvatarWake.hasPrimary(homeId)) {
             sendResult(player, false, "家 " + homeId + " 已经有载体了（一个 ID 只能有一个载体）");
+            return;
+        }
+        // binding 在、载体没了 = 孤儿记录（旧语义遗留 / 载体被杀 / 换世界）：允许重新生成，
+        // 但只能由原所有者来（否则谁都能抢别人已经付过核心的 ID）。
+        String owner = CoreHomes.boundPlayer(homeId);
+        if (owner != null && !owner.equals(player.getUUID().toString())) {
+            sendResult(player, false, "家 " + homeId + " 属于其他玩家，不能替它生成载体");
             return;
         }
         if (!(player.level() instanceof ServerLevel level)) {
