@@ -52,7 +52,51 @@ public final class SnowLeopardMod {
         return selfTest && !clientTest;
     }
 
+    /**
+     * 硬依赖校验：core（契约 + 发布版本）与 entitytools（含它能否看见 MC 类）。
+     *
+     * <p>任何一项不过就 {@code throw} —— FML 会把模组标记为加载失败并弹出错误界面，
+     * 这是"缺依赖"该有的表现；旧行为是照常启动、用到时才 {@code NoClassDefFoundError}。
+     */
+    private static void requireDependencies() {
+        String issue = FrameworkDependencies.coreIssue(
+                FrameworkDependencies.liveCoreApi(), FrameworkDependencies.liveCoreRelease());
+        if (issue == null) {
+            issue = FrameworkDependencies.classIssue("snowleopard.core.SnowLeopard",
+                    SnowLeopardMod.class.getClassLoader());
+        }
+        if (issue == null) {
+            issue = FrameworkDependencies.classIssue(
+                    "io.github.piwugu.snowleopard.mc.EntityToolsModule",
+                    SnowLeopardMod.class.getClassLoader());
+        }
+        if (issue == null) {
+            // 内嵌 entitytools 与 MC 类**是否在同一可见层**：打包环境里 jarJar 进插件层，
+            // 曾经就出现过"能加载到 entitytools、却解析不了它引用的库类"（authlib 事故）。
+            // 这里用 entitytools 自己的类加载器去解 MC 基类，提前把这类问题拦在加载期。
+            try {
+                Class<?> et = Class.forName("io.github.piwugu.snowleopard.mc.EntityToolsModule",
+                        false, SnowLeopardMod.class.getClassLoader());
+                issue = FrameworkDependencies.classIssue("net.minecraft.world.entity.LivingEntity",
+                        et.getClassLoader());
+            } catch (Throwable t) {
+                issue = "entitytools 无法定位自身类加载器：" + t;
+            }
+        }
+        if (issue != null) {
+            throw new IllegalStateException("[雪豹框架] 依赖校验失败，拒绝加载：" + issue);
+        }
+        LOG.info("[雪豹框架] 依赖校验通过：core {} (api={}) · entitytools 可见 MC 类",
+                FrameworkDependencies.liveCoreRelease(), FrameworkDependencies.liveCoreApi());
+    }
+
     public SnowLeopardMod(ModContainer container) {
+        // **硬依赖闸**（2026-10-28）：缺依赖/版本不配套必须拒绝加载。
+        // 放在 try 之前：这不是"装配失败可以降级"的那类问题——core 或 entitytools 缺失时，
+        // 模组起来也是个空壳（工具层全废、AI 不说话），比加载失败更难查。
+        // 注意：jarJar 的 metadata.json 没有 mandatory 字段，FML 不会替我们拦这件事。
+        requireDependencies();
+
         try {
             Path gameDir = FMLPaths.GAMEDIR.get();
             Path storage = gameDir.resolve("snowleopard");

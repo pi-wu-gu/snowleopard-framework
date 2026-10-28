@@ -30,3 +30,8 @@ type="required"
 versionRange="${minecraft_version_range}"
 ordering="NONE"
 side="BOTH"
+
+# 内嵌库（snowleopard-core / entitytools）走 jarJar----
+# jarJar 的 metadata.json **没有 mandatory 字段**，FML 不会因为内嵌库缺失或版本不符拒绝加载，
+# 所以这两条"硬依赖"由模组自己在构造期校验（FrameworkDependencies）：契约号不符、缺发布版本、
+# 缺类、或内嵌库看不见 MC 类 → 直接抛错拒绝加载，而不是起来后在使用时才 NoClassDefFoundError。

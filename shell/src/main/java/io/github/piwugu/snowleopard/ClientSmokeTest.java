@@ -605,6 +605,25 @@ final class ClientSmokeTest {
                         + " 显式自测=" + io.github.piwugu.snowleopard.SnowLeopardMod.selfTestEnabled(false, true)
                         + " 验收优先=" + io.github.piwugu.snowleopard.SnowLeopardMod.selfTestEnabled(true, true));
 
+        // 硬依赖校验（2026-10-28）：jarJar 的 metadata.json 没有 mandatory 字段，FML 不会因
+        // "core 缺失/版本不配套" 拒绝加载 → 必须自己在构造期拦。这里打它的判定函数：
+        // 契约不符/缺版本/缺类都必须返回原因，正常组合必须返回 null（否则会把能跑的也拒掉）。
+        String depOk = io.github.piwugu.snowleopard.FrameworkDependencies.coreIssue(
+                io.github.piwugu.snowleopard.FrameworkDependencies.EXPECTED_CORE_API, "0.7.2");
+        String depApiBad = io.github.piwugu.snowleopard.FrameworkDependencies.coreIssue(
+                io.github.piwugu.snowleopard.FrameworkDependencies.EXPECTED_CORE_API + 1, "0.7.2");
+        String depNoVer = io.github.piwugu.snowleopard.FrameworkDependencies.coreIssue(
+                io.github.piwugu.snowleopard.FrameworkDependencies.EXPECTED_CORE_API, null);
+        String depNoCls = io.github.piwugu.snowleopard.FrameworkDependencies.classIssue(
+                "io.github.piwugu.snowleopard.NoSuchClassProbe", ClientSmokeTest.class.getClassLoader());
+        boolean depRuntimeOk = io.github.piwugu.snowleopard.FrameworkDependencies.liveCoreApi()
+                == io.github.piwugu.snowleopard.FrameworkDependencies.EXPECTED_CORE_API;
+        ok("依赖校验：契约不符/缺版本/缺类都拒绝加载，实际内嵌 core 契约匹配",
+                depOk == null && depApiBad != null && depNoVer != null && depNoCls != null && depRuntimeOk,
+                "正常=" + depOk + " | 契约不符=" + (depApiBad != null) + " | 缺版本=" + (depNoVer != null)
+                        + " | 缺类=" + (depNoCls != null)
+                        + " | liveCoreApi=" + io.github.piwugu.snowleopard.FrameworkDependencies.liveCoreApi());
+
         EntityToolsRuntime.dispatch(model, "view", "look",
                 Map.of("yaw", (double) gazeBase + 120, "pitch", 0.0));
         for (int i = 0; i < 80; i++) {
