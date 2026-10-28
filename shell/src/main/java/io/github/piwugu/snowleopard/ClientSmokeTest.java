@@ -71,14 +71,31 @@ final class ClientSmokeTest {
         SnowLeopardMod.LOG.info("[雪豹框架][CLIENT] ===== 客户端验收开始（玩家 {}，位置 {}）=====",
                 player.getGameProfile().getName(), base);
 
-        // 清掉上次验收残留的载体（同名会撞"禁重名"，残骸也没必要留）
-        java.util.List<io.github.piwugu.snowleopard.AvatarEntity> leftovers = new java.util.ArrayList<>();
+        // 清掉上次验收残留的载体（同名会撞"禁重名"，残骸也没必要留）。
+        // **循环清到干净**（2026-10-28）：一次遍历只覆盖当时已加载的实体，残留的在稍后加载的区块里
+        // 就会"复活"——本轮身份自愈就因此接上了上一轮的旧载体（同名、同 modelId），断言假失败。
+        int leftoverRounds = 0;
+        for (int pass = 0; pass < 3; pass++) {
+            java.util.List<io.github.piwugu.snowleopard.AvatarEntity> leftovers = new java.util.ArrayList<>();
+            for (net.minecraft.world.entity.Entity e : level.getAllEntities()) {
+                if (e instanceof io.github.piwugu.snowleopard.AvatarEntity av) {
+                    leftovers.add(av);
+                }
+            }
+            if (leftovers.isEmpty()) {
+                break;
+            }
+            leftoverRounds++;
+            leftovers.forEach(net.minecraft.world.entity.Entity::discard);
+        }
+        int remainingAvatars = 0;
         for (net.minecraft.world.entity.Entity e : level.getAllEntities()) {
-            if (e instanceof io.github.piwugu.snowleopard.AvatarEntity av) {
-                leftovers.add(av);
+            if (e instanceof io.github.piwugu.snowleopard.AvatarEntity) {
+                remainingAvatars++;
             }
         }
-        leftovers.forEach(net.minecraft.world.entity.Entity::discard);
+        ok("清场彻底（世界内不残留任何载体，避免同名/同 modelId 的幽灵实体）",
+                remainingAvatars == 0, "清理轮次=" + leftoverRounds + " 剩余=" + remainingAvatars);
         // 登记表不随实体消失（卸载≠解绑）：上一轮的"小白"还挂在表里，先清自己的旧登记，
         // 否则同名绑定撞"禁重名"（只清 clienttest 的，别人的不动）
         EntityToolsRuntime.dispatch(model, "avatar", "avatar_unbind", Map.of());
@@ -132,6 +149,25 @@ final class ClientSmokeTest {
         Result bindAv = EntityToolsRuntime.dispatch(model, "avatar", "avatar_bind", Map.of());
         ok("载体就位（豹猫外观，右键/点名可唤醒）", bindAv instanceof Result.Ok,
                 brief(bindAv) + " | 位置：你身前 2.5 格");
+
+        // ⑥·b 身份自愈（2026-10-28 架构修正）：**实体存 ID，排程表里的 uuid 只是地址**。
+        // 把登记的地址改成随机值（等价于换世界/回档后旧 uuid 失效），avatar_status 必须仍报 loaded=true，
+        // 且地址被回写成当前实体的真 uuid。旧实现这里会 loaded=false 且**永不恢复**。
+        String realUuid = avatar.getStringUUID();
+        String staleUuid = "00000000-0000-4000-8000-00000000dead";
+        boolean addrChanged = io.github.piwugu.snowleopard.AvatarWake
+                .rebindAddressForTest(model, realUuid, staleUuid);
+        var healedStatus = EntityToolsRuntime.dispatch(model, "avatar", "avatar_status", Map.of());
+        String healedBody = String.valueOf(data(healedStatus));
+        boolean selfHealed = healedBody.contains(realUuid) && !healedBody.contains(staleUuid)
+                && healedBody.contains("loaded=true");
+        ok("载体身份自愈（旧 uuid 失效 → 按实体上的 modelId 重新发现并回写地址）",
+                addrChanged && selfHealed,
+                "改地址=" + addrChanged + " · 回写=" + healedBody.contains(realUuid)
+                        + " · 无残留死地址=" + !healedBody.contains(staleUuid)
+                        + " · loaded=" + healedBody.contains("loaded=true")
+                        + " · 实体=" + realUuid.substring(0, 8)
+                        + " · status=" + healedBody.substring(0, Math.min(220, healedBody.length())));
 
         // ⑥·补 备货：一组木头 + 一组石头进九格背包（用户 2026-10-24 03:29 要求；每次进服重置这两格）
         if (avatar instanceof io.github.piwugu.snowleopard.tools.PackCarrier pc) {

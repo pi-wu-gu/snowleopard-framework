@@ -128,6 +128,41 @@ public final class AvatarStore {
         }
     }
 
+    /**
+     * 回写"当前承载实体"的 uuid（2026-10-28）。
+     *
+     * <p><b>身份是 modelId，uuid 只是地址</b>：换世界、存档回档、实体被重生成之后旧 uuid 必然失效。
+     * 只要新实体的 NBT 里 SnowModelId 仍是这个模型，就该自动接上——而不是让定时唤醒与提及唤醒
+     * **永久哑火**（旧实现在 findEntity(旧uuid) 返回 null 后没有任何自愈路径）。
+     *
+     * <p>按 (modelId, oldUuid) 精确定位那一条：同一模型可能有多条登记（主 + 被降级的旧载体），
+     * 只换真正失效的那条，别顺手改别人的地址。
+     *
+     * @return true=找到了那一条且 uuid 确实变了
+     */
+    public boolean rebindUuid(String modelId, String oldUuid, String newUuid) {
+        synchronized (lock) {
+            if (modelId == null || oldUuid == null || newUuid == null || newUuid.isBlank()) {
+                return false;
+            }
+            if (oldUuid.equals(newUuid)) {
+                return false;
+            }
+            // 新地址可能已被另一条登记占着（同一实体重复登记）→ 先清掉那条，避免两份指向同一实体
+            entries.removeIf(e -> e.uuid().equals(newUuid) && !e.modelId().equals(modelId));
+            for (int i = 0; i < entries.size(); i++) {
+                Entry e = entries.get(i);
+                if (e.modelId().equals(modelId) && e.uuid().equals(oldUuid)) {
+                    entries.set(i, new Entry(newUuid, e.modelId(), e.name(), e.primary(),
+                            e.intervalSec(), e.nextFireAt()));
+                    save();
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     public Entry byUuid(String uuid) {
         synchronized (lock) {
             return entries.stream().filter(e -> e.uuid().equals(uuid)).findFirst().orElse(null);

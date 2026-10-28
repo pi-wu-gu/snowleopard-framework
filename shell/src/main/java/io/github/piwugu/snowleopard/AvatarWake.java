@@ -404,7 +404,7 @@ public final class AvatarWake {
         long now = System.currentTimeMillis();
         for (AvatarStore.Entry entry : store.due(now)) {
             store.advance(entry.uuid(), now);   // 先推进：**跳过也不堆积、不补发**（裁决 3）
-            Entity entity = findEntity(server, entry.uuid());
+            Entity entity = resolveCarrier(server, entry);   // 身份=modelId：旧 uuid 失效时按实体上的 ID 自愈
             if (entity == null) {
                 SnowLeopardMod.LOG.info("[雪豹框架][唤醒] 定时跳过 {}（实体未加载，nextFireAt 已正常推进）",
                         entry.modelId());
@@ -444,7 +444,7 @@ public final class AvatarWake {
                 note(speaker, shown + "：被提及，但没有主载体，未唤醒");
                 continue;   // 没载体：只提示，不唤醒
             }
-            Entity carrier = findEntity(server(), primary.uuid());
+            Entity carrier = resolveCarrier(server(), primary);
             if (!(carrier instanceof AvatarEntity avatar)) {
                 note(speaker, shown + "：被提及，但载体未加载，本轮只提示");
                 continue;   // 主载体未加载：本轮只提示（M12 已记），下次点名还会尝试
@@ -525,14 +525,23 @@ public final class AvatarWake {
     private static Result status(String model) {
         List<Map<String, Object>> out = new ArrayList<>();
         MinecraftServer server = server();
-        for (AvatarStore.Entry e : store.byModel(model)) {
+        for (AvatarStore.Entry snapshot : store.byModel(model)) {
+            // **先解析，再取一次登记**（2026-10-28 真机踩到）：resolveCarrier 可能把地址回写成新值，
+            // 而这里的 snapshot 是回写前取好的副本——直接用它输出，会把一个已经失效的死地址报给模型/运维，
+            // 表现是"自愈日志说改了、status 却还是老 uuid"。
+            Entity carrier = resolveCarrier(server, snapshot);
+            AvatarStore.Entry e = carrier == null ? snapshot
+                    : store.byUuid(carrier.getStringUUID());
+            if (e == null) {
+                e = snapshot;
+            }
             Map<String, Object> m = new java.util.LinkedHashMap<>();
             m.put("uuid", e.uuid());
             m.put("name", e.name().isEmpty() ? model : e.name());
             m.put("primary", e.primary());
             m.put("intervalSec", e.intervalSec());
             m.put("nextFireAt", e.nextFireAt());
-            m.put("loaded", findEntity(server, e.uuid()) != null);
+            m.put("loaded", carrier != null);
             out.add(m);
         }
         return Result.ok(Map.of("avatars", out));
@@ -545,7 +554,7 @@ public final class AvatarWake {
             if (!e.primary()) {
                 continue;
             }
-            var entity = findEntity(server(), e.uuid());
+            var entity = resolveCarrier(server(), e);
             if (entity instanceof AvatarEntity avatar) {
                 return avatar;
             }
@@ -698,6 +707,73 @@ public final class AvatarWake {
     }
 
     /** 载体对外显示名（与身份单点一致：有名字用名字，没名字用模型编号）。 */
+    /**
+     * 解析某条登记**当前**对应的实体（2026-10-28 架构修正）。
+     *
+     * <p><b>身份是 modelId，uuid 只是地址</b>。旧实现只有 {@link #findEntity} 一条路：
+     * 换世界 / 存档回档 / 实体被重生成后 uuid 全失效 → 定时唤醒永久跳过、点名唤醒永远回
+     * "载体未加载"，而实体自己的 NBT（SnowModelId）明明还写着这个模型——**没人去用它反查**。
+     *
+     * <p>这里补上自愈：uuid 找不到时按实体侧 ID 重新发现，并把新地址回写进排程表，
+     * 于是"把家搬到另一个世界"变成正常路径（重新绑定载体即恢复），不再需要删 avatars.json。
+     */
+    private static Entity resolveCarrier(MinecraftServer server, AvatarStore.Entry entry) {
+        if (server == null || entry == null) {
+            return null;
+        }
+        Entity direct = findEntity(server, entry.uuid());
+        if (direct != null) {
+            return direct;
+        }
+        // 多候选时的择优选（2026-10-28 真机踩到）：世界里可能残留同 modelId 的旧载体
+        // （上一轮验收没清干净、或玩家手放了一只），先按**名字**匹配——名字也是身份的一部分
+        // （`[雪豹·小白]` 就靠它区分谁被点了名）；都对不上才取第一个并留 WARN。
+        Entity fallback = null;
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Entity cand : level.getEntities().getAll()) {
+                if (!(cand instanceof AvatarEntity av) || !entry.modelId().equals(av.boundModel())) {
+                    continue;
+                }
+                boolean sameName = !entry.name().isEmpty() && cand.hasCustomName()
+                        && entry.name().equals(cand.getCustomName().getString());
+                if (sameName) {
+                    return adoptAddress(entry, av);
+                }
+                if (fallback == null) {
+                    fallback = cand;
+                }
+            }
+        }
+        if (fallback != null) {
+            SnowLeopardMod.LOG.warn("[雪豹框架][载体] {} 有多个候选载体且名字都对不上"
+                    + "（登记名='{}'），暂取 uuid={}——建议清理多余的载体",
+                    entry.modelId(), entry.name(), fallback.getStringUUID());
+            return adoptAddress(entry, (AvatarEntity) fallback);
+        }
+        return null;
+    }
+
+    /** 把"当下这只实体"的地址写回登记（身份不变，只换地址）。 */
+    private static Entity adoptAddress(AvatarStore.Entry entry, AvatarEntity carrier) {
+        String fresh = carrier.getStringUUID();
+        if (store.rebindUuid(entry.modelId(), entry.uuid(), fresh)) {
+            SnowLeopardMod.LOG.info(
+                    "[雪豹框架][载体] 身份自愈 {}：uuid {} → {}（旧地址失效，按实体上的 modelId 重新发现）",
+                    entry.modelId(), entry.uuid(), fresh);
+        }
+        return carrier;
+    }
+
+    /**
+     * 自检用：把某条登记的"地址"改成指定值，模拟"换世界 / 回档后旧 uuid 失效"。
+     *
+     * <p>为什么需要这条缝：实体 uuid 是 final、没法在测试里改，而"旧地址失效"正是本次要验的场景。
+     * 改地址后调 avatar_status，若 loaded 仍为 true 且 uuid 已回写，说明自愈真的发生了。
+     */
+    public static boolean rebindAddressForTest(String model, String oldUuid, String newUuid) {
+        return store != null && store.rebindUuid(model, oldUuid, newUuid);
+    }
+
     private static String displayName(AvatarStore.Entry entry) {
         return entry.name().isEmpty() ? entry.modelId() : entry.name();
     }
